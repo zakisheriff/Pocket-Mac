@@ -113,6 +113,12 @@ final class WindowManager: ObservableObject {
         windows[index].position = clampedPosition(newPosition, size: windows[index].size)
     }
 
+    func resize(_ id: UUID, to newSize: CGSize) {
+        guard let index = windows.firstIndex(where: { $0.id == id }) else { return }
+        guard !windows[index].isFullscreen else { return }
+        windows[index].size = newSize
+    }
+
     private func clampedPosition(_ point: CGPoint, size: CGSize) -> CGPoint {
         guard canvasBounds != .zero else { return point }
         let minX = canvasBounds.minX - size.width + 60
