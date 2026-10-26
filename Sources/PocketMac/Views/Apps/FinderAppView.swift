@@ -39,24 +39,7 @@ struct FinderAppView: View {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 72))], spacing: 14) {
                     ForEach(items) { item in
-                        VStack(spacing: 4) {
-                            Image(systemName: item.symbol)
-                                .font(.system(size: 26))
-                                .foregroundStyle(item.tint)
-                                .frame(width: 44, height: 36)
-                            Text(item.name)
-                                .font(.system(size: 10))
-                                .lineLimit(2)
-                                .multilineTextAlignment(.center)
-                                .foregroundStyle(.black.opacity(0.8))
-                        }
-                        .padding(6)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(selection == item.id ? Color.accentColor.opacity(0.25) : .clear)
-                        )
-                        .contentShape(Rectangle())
-                        .onTapGesture {
+                        FinderIconCell(item: item, isSelected: selection == item.id) {
                             HapticsManager.selectionChanged()
                             selection = item.id
                         }
@@ -68,7 +51,7 @@ struct FinderAppView: View {
         .background(Color.white)
     }
 
-    private func icon(for entry: String) -> String {
+    fileprivate func icon(for entry: String) -> String {
         switch entry {
         case "Recents": return "clock.fill"
         case "Desktop": return "menubar.dock.rectangle"
@@ -76,5 +59,32 @@ struct FinderAppView: View {
         case "Downloads": return "arrow.down.circle.fill"
         default: return "cpu"
         }
+    }
+}
+
+private struct FinderIconCell: View {
+    let item: FinderItem
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: item.symbol)
+                .font(.system(size: 26))
+                .foregroundStyle(item.tint)
+                .frame(width: 44, height: 36)
+            Text(item.name)
+                .font(.system(size: 10))
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.black.opacity(0.8))
+        }
+        .padding(6)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isSelected ? Color.accentColor.opacity(0.25) : .clear)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
     }
 }
