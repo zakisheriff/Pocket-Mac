@@ -6,26 +6,35 @@ struct FinderItem: Identifiable {
     let symbol: String
     let tint: Color
     let kind: String
+    let location: String
 }
 
 struct FinderAppView: View {
     @State private var selection: FinderItem.ID?
+    @State private var activeLocation = "Recents"
 
     private let sidebar: [String] = ["Recents", "Desktop", "Documents", "Downloads", "Applications"]
 
     private let items: [FinderItem] = [
-        FinderItem(name: "Applications", symbol: "square.grid.2x2.fill", tint: .blue, kind: "Folder"),
-        FinderItem(name: "Desktop", symbol: "menubar.dock.rectangle", tint: .blue, kind: "Folder"),
-        FinderItem(name: "Documents", symbol: "folder.fill", tint: .blue, kind: "Folder"),
-        FinderItem(name: "Downloads", symbol: "arrow.down.circle.fill", tint: .blue, kind: "Folder"),
-        FinderItem(name: "Pocket Mac Notes.rtf", symbol: "doc.richtext.fill", tint: .gray, kind: "Document"),
-        FinderItem(name: "iPhone Duo Concept.psd", symbol: "photo.fill", tint: .indigo, kind: "Image"),
-        FinderItem(name: "Build Log.txt", symbol: "doc.plaintext.fill", tint: .gray, kind: "Text"),
+        FinderItem(name: "Applications", symbol: "square.grid.2x2.fill", tint: .blue, kind: "Folder", location: "Desktop"),
+        FinderItem(name: "Desktop", symbol: "menubar.dock.rectangle", tint: .blue, kind: "Folder", location: "Desktop"),
+        FinderItem(name: "Documents", symbol: "folder.fill", tint: .blue, kind: "Folder", location: "Documents"),
+        FinderItem(name: "Downloads", symbol: "arrow.down.circle.fill", tint: .blue, kind: "Folder", location: "Downloads"),
+        FinderItem(name: "Pocket Mac Notes.rtf", symbol: "doc.richtext.fill", tint: .gray, kind: "Document", location: "Documents"),
+        FinderItem(name: "iPhone Duo Concept.psd", symbol: "photo.fill", tint: .indigo, kind: "Image", location: "Downloads"),
+        FinderItem(name: "Build Log.txt", symbol: "doc.plaintext.fill", tint: .gray, kind: "Text", location: "Downloads"),
     ]
+
+    private var visibleItems: [FinderItem] {
+        activeLocation == "Recents" ? items : items.filter { $0.location == activeLocation }
+    }
 
     var body: some View {
         HStack(spacing: 0) {
-            List(sidebar, id: \.self) { entry in
+            List(sidebar, id: \.self, selection: Binding(
+                get: { activeLocation },
+                set: { if let value = $0 { activeLocation = value; HapticsManager.selectionChanged() } }
+            )) { entry in
                 Label(entry, systemImage: icon(for: entry))
                     .font(.system(size: 12))
             }
@@ -37,15 +46,22 @@ struct FinderAppView: View {
             Divider()
 
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 72))], spacing: 14) {
-                    ForEach(items) { item in
-                        FinderIconCell(item: item, isSelected: selection == item.id) {
-                            HapticsManager.selectionChanged()
-                            selection = item.id
+                if visibleItems.isEmpty {
+                    Text("This folder is empty")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 40)
+                } else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 72))], spacing: 14) {
+                        ForEach(visibleItems) { item in
+                            FinderIconCell(item: item, isSelected: selection == item.id) {
+                                HapticsManager.selectionChanged()
+                                selection = item.id
+                            }
                         }
                     }
+                    .padding(10)
                 }
-                .padding(10)
             }
         }
         .background(Color.white)
