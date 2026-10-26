@@ -106,11 +106,20 @@ struct WindowChromeView: View {
         case .yellow: fill = Color(red: 1.0, green: 0.74, blue: 0.18)
         case .green: fill = Color(red: 0.16, green: 0.78, blue: 0.25)
         }
+        let name: String
+        switch color {
+        case .red: name = "Close"
+        case .yellow: name = "Minimize"
+        case .green: name = "Zoom"
+        }
+
         return Circle()
             .fill(fill)
             .frame(width: 12, height: 12)
             .overlay(Circle().strokeBorder(.black.opacity(0.12), lineWidth: 0.5))
-            .contentShape(Circle())
+            .frame(width: 26, height: 26)
+            .contentShape(Rectangle())
+            .accessibilityLabel(name)
             .onTapGesture {
                 HapticsManager.tap()
                 action()

@@ -19,6 +19,7 @@ struct DockView: View {
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: iconSize * 0.3))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Launchpad")
             .background(
                 GeometryReader { proxy in
                     Color.clear.preference(
@@ -74,6 +75,8 @@ struct DockView: View {
                 .frame(width: 4, height: 4)
         }
         .contentShape(Rectangle())
+        .accessibilityLabel(app.displayName)
+        .accessibilityAddTraits(isRunning ? [.isButton, .isSelected] : .isButton)
         .onTapGesture {
             windowManager.open(app)
         }
