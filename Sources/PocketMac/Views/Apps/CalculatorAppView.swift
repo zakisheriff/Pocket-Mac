@@ -110,5 +110,21 @@ private struct CalculatorKey: View {
                 .fill(isActive ? Color.white : (isOperator ? Color.orange : (isFunction ? Color(white: 0.65) : Color(white: 0.22))))
         )
         .clipShape(isWide ? AnyShape(Capsule()) : AnyShape(Circle()))
+        .accessibilityLabel(accessibilityName)
+    }
+
+    private var accessibilityName: String {
+        switch label {
+        case "÷": return "Divide"
+        case "×": return "Multiply"
+        case "−": return "Subtract"
+        case "+": return "Add"
+        case "=": return "Equals"
+        case "C": return "Clear"
+        case "±": return "Plus minus"
+        case "%": return "Percent"
+        case ".": return "Decimal point"
+        default: return label
+        }
     }
 }
