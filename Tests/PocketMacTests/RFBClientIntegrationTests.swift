@@ -121,6 +121,33 @@ final class RFBClientIntegrationTests: XCTestCase {
         XCTAssertFalse(client.hasScreen)
     }
 
+    /// A route that never answers (like Bonjour resolving onto an interface
+    /// that doesn't route) must not hang: the next route is tried.
+    func testHungRouteFallsThroughToTheNextOne() async throws {
+        let server = try FakeRFBServer(login: .vncPassword("pw123456"), width: 3, height: 2, pixels: screenPixels)
+        server.start()
+        var reached: (String, UInt16)?
+        let client = RFBClient()
+        client.connect(MacConnectionRequest(
+            endpoint: .hostPort(host: "10.255.255.1", port: 5900), // unroutable: never answers
+            fallbacks: [.hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: server.port)!)],
+            displayName: "Test",
+            username: "",
+            password: "pw123456",
+            onReachedAddress: { host, port in reached = (host, port) }
+        ))
+
+        do {
+            try await waitUntil(timeout: 15) { client.hasScreen }
+        } catch {
+            XCTFail("never fell back to the working route; state = \(client.state)")
+            return
+        }
+        XCTAssertEqual(reached?.0, "127.0.0.1")
+        XCTAssertEqual(reached?.1, server.port)
+        client.disconnect()
+    }
+
     func testUnreachableMacFailsWithAHelpfulMessage() async throws {
         let client = RFBClient()
         client.connect(request(port: 1, username: "zaki", password: "x"))
