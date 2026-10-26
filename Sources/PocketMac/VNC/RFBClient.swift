@@ -45,12 +45,25 @@ final class RFBClient: ObservableObject {
     private(set) var cursor: RFBCursor?
     private(set) var buttons: RFBButtons = []
 
-    weak var display: RemoteDisplaySink? {
-        didSet {
-            display?.display(image: framebuffer?.makeLiveImage(), size: screenSize)
-            display?.cursorChanged(cursor)
-            display?.pointerMoved(to: pointer)
-        }
+    /// Every on-screen view showing this Mac, held weakly. Layout changes can
+    /// briefly create a second view; each one gets every frame, so none is
+    /// ever left showing a black screen.
+    private let displays = NSHashTable<AnyObject>.weakObjects()
+
+    private var sinks: [RemoteDisplaySink] {
+        displays.allObjects.compactMap { $0 as? RemoteDisplaySink }
+    }
+
+    func addDisplay(_ sink: RemoteDisplaySink) {
+        guard !displays.contains(sink) else { return }
+        displays.add(sink)
+        sink.display(image: framebuffer?.makeLiveImage(), size: screenSize)
+        sink.cursorChanged(cursor)
+        sink.pointerMoved(to: pointer)
+    }
+
+    func removeDisplay(_ sink: RemoteDisplaySink) {
+        displays.remove(sink)
     }
 
     private var stream: RFBStream?
@@ -68,8 +81,10 @@ final class RFBClient: ObservableObject {
         hasScreen = false
         cursor = nil
         framebuffer = nil
-        display?.display(image: nil, size: .zero)
-        display?.cursorChanged(nil)
+        for sink in sinks {
+            sink.display(image: nil, size: .zero)
+            sink.cursorChanged(nil)
+        }
 
         sessionTask = Task.detached(priority: .userInitiated) { [weak self] in
             let session = RFBSession(stream: stream, request: request, client: self)
@@ -117,7 +132,7 @@ final class RFBClient: ObservableObject {
             y: min(max(point.y, 0), screenSize.height - 1)
         )
         pointer = clamped
-        display?.pointerMoved(to: clamped)
+        for sink in sinks { sink.pointerMoved(to: clamped) }
         sendPointer()
     }
 
@@ -202,8 +217,10 @@ final class RFBClient: ObservableObject {
         self.framebuffer = framebuffer
         screenSize = CGSize(width: framebuffer.width, height: framebuffer.height)
         pointer = CGPoint(x: screenSize.width / 2, y: screenSize.height / 2)
-        display?.display(image: nil, size: screenSize)
-        display?.pointerMoved(to: pointer)
+        for sink in sinks {
+            sink.display(image: nil, size: screenSize)
+            sink.pointerMoved(to: pointer)
+        }
         state = .connected
     }
 
@@ -215,13 +232,14 @@ final class RFBClient: ObservableObject {
             movePointer(to: pointer)
         }
         if !hasScreen { hasScreen = true }
-        display?.display(image: framebuffer.makeLiveImage(), size: size)
+        let image = framebuffer.makeLiveImage()
+        for sink in sinks { sink.display(image: image, size: size) }
     }
 
     fileprivate func cursorChanged(stream: RFBStream, cursor newCursor: RFBCursor) {
         guard stream === self.stream else { return }
         cursor = newCursor
-        display?.cursorChanged(newCursor)
+        for sink in sinks { sink.cursorChanged(newCursor) }
     }
 
     fileprivate func receivedClipboard(stream: RFBStream, text: String) {
