@@ -26,8 +26,21 @@ struct MacKeyboardView: View {
                     let unit = (available - Self.spacing * CGFloat(row.count - 1)) / units
                     HStack(spacing: Self.spacing) {
                         ForEach(row) { key in
-                            KeyCap(label: input.label(for: key), isOn: isOn(key), isWide: key.width > 1) {
-                                input.press(key)
+                            Group {
+                                if key.action == .verticalArrows {
+                                    VStack(spacing: 2) {
+                                        KeyCap(label: "↑", isOn: false, isWide: false, compact: true) {
+                                            input.tapKeysym(Keysym.up)
+                                        }
+                                        KeyCap(label: "↓", isOn: false, isWide: false, compact: true) {
+                                            input.tapKeysym(Keysym.down)
+                                        }
+                                    }
+                                } else {
+                                    KeyCap(label: input.label(for: key), isOn: isOn(key), isWide: key.width > 1) {
+                                        input.press(key)
+                                    }
+                                }
                             }
                             .frame(width: unit * key.width, height: keyHeight)
                         }
@@ -54,12 +67,13 @@ private struct KeyCap: View {
     let label: String
     let isOn: Bool
     let isWide: Bool
+    var compact = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Text(label)
-                .font(.system(size: isWide ? 13 : 17, weight: isWide ? .medium : .regular))
+                .font(.system(size: compact ? 11 : (isWide ? 13 : 17), weight: isWide ? .medium : .regular))
                 .minimumScaleFactor(0.6)
                 .lineLimit(1)
                 .foregroundStyle(isOn ? Color.black : Color.white)

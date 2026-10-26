@@ -7,6 +7,8 @@ struct MacKey: Identifiable, Hashable {
         case keysym(UInt32)
         case modifier(ModifierKey)
         case capsLock
+        /// MacBook-style stacked half-height ↑ and ↓.
+        case verticalArrows
     }
 
     let id: String
@@ -45,7 +47,7 @@ struct MacKey: Identifiable, Hashable {
          .modifier(.option, id: "option-left", label: "⌥", width: 1), .modifier(.command, id: "command-left", label: "⌘", width: 1.5),
          MacKey(id: "space", label: "", action: .character(" ", shifted: " "), width: 4.5),
          .modifier(.command, id: "command-right", label: "⌘", width: 1.5), .modifier(.option, id: "option-right", label: "⌥", width: 1),
-         .special("left", "←", Keysym.left, width: 1), .special("up", "↑", Keysym.up, width: 1),
+         .special("left", "←", Keysym.left, width: 1), MacKey(id: "updown", label: "", action: .verticalArrows, width: 1),
          .special("right", "→", Keysym.right, width: 1)],
     ]
 }
@@ -119,6 +121,8 @@ final class SessionInputController: ObservableObject {
             toggle(modifier)
         case .capsLock:
             capsLock.toggle()
+        case .verticalArrows:
+            break // each half sends its own arrow via tapKeysym
         case .keysym(let keysym):
             client.tapKey(keysym, modifiers: activeModifiers)
             latched.removeAll()
