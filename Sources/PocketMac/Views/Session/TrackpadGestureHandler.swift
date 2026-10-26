@@ -12,7 +12,8 @@ final class TrackpadGestureHandler: NSObject, UIGestureRecognizerDelegate {
         var scroll: (CGVector) -> Void = { _ in }
         var dragBegan: () -> Void = {}
         var dragEnded: () -> Void = {}
-        var pinch: ((CGFloat) -> Void)?
+        /// Scale change and the pinch centre in the view.
+        var pinch: ((CGFloat, CGPoint) -> Void)?
     }
 
     var actions = Actions()
@@ -107,8 +108,8 @@ final class TrackpadGestureHandler: NSObject, UIGestureRecognizerDelegate {
     }
 
     @objc private func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
-        guard let pinch = actions.pinch else { return }
-        pinch(recognizer.scale)
+        guard let pinch = actions.pinch, let view = recognizer.view else { return }
+        pinch(recognizer.scale, recognizer.location(in: view))
         recognizer.scale = 1
     }
 }
