@@ -10,14 +10,20 @@ struct SafariAppView: View {
     @State private var canGoForward = false
     @State private var isLoading = false
     @State private var navigationToken = UUID()
+    @State private var backToken = UUID()
+    @State private var forwardToken = UUID()
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "chevron.left")
                     .foregroundStyle(canGoBack ? .black : .black.opacity(0.25))
+                    .contentShape(Rectangle())
+                    .onTapGesture { if canGoBack { HapticsManager.tap(); backToken = UUID() } }
                 Image(systemName: "chevron.right")
                     .foregroundStyle(canGoForward ? .black : .black.opacity(0.25))
+                    .contentShape(Rectangle())
+                    .onTapGesture { if canGoForward { HapticsManager.tap(); forwardToken = UUID() } }
 
                 HStack(spacing: 6) {
                     Image(systemName: isLoading ? "circle.dotted" : "lock.fill")
@@ -50,6 +56,8 @@ struct SafariAppView: View {
             WebContainerView(
                 url: pendingLoadURL,
                 navigationToken: navigationToken,
+                backToken: backToken,
+                forwardToken: forwardToken,
                 isLoading: $isLoading,
                 canGoBack: $canGoBack,
                 canGoForward: $canGoForward,
@@ -95,6 +103,8 @@ struct SafariAppView: View {
 private struct WebContainerView: UIViewRepresentable {
     let url: URL?
     let navigationToken: UUID
+    let backToken: UUID
+    let forwardToken: UUID
     @Binding var isLoading: Bool
     @Binding var canGoBack: Bool
     @Binding var canGoForward: Bool
@@ -116,14 +126,26 @@ private struct WebContainerView: UIViewRepresentable {
             context.coordinator.lastToken = navigationToken
             webView.load(URLRequest(url: url))
         }
+        if context.coordinator.lastBackToken != backToken {
+            context.coordinator.lastBackToken = backToken
+            webView.goBack()
+        }
+        if context.coordinator.lastForwardToken != forwardToken {
+            context.coordinator.lastForwardToken = forwardToken
+            webView.goForward()
+        }
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         var parent: WebContainerView
         var lastToken: UUID?
+        var lastBackToken: UUID?
+        var lastForwardToken: UUID?
 
         init(_ parent: WebContainerView) {
             self.parent = parent
+            self.lastBackToken = parent.backToken
+            self.lastForwardToken = parent.forwardToken
         }
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
