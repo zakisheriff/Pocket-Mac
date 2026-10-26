@@ -28,7 +28,14 @@ struct SessionView: View {
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .overlay { statusOverlay }
-        .sheet(isPresented: $showingSettings) { SettingsSheet(settings: settings) }
+        .sheet(isPresented: $showingSettings) {
+            // Half height first, so changes show live on the Mac screen
+            // above (which still takes input); swipe up for the rest.
+            SettingsSheet(settings: settings)
+                .presentationDetents([.medium, .large])
+                .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+                .presentationContentInteraction(.scrolls)
+        }
         .onChange(of: client.state) { _, state in
             if state == .connected { HapticsManager.success() }
         }
@@ -51,7 +58,8 @@ struct SessionView: View {
                 allowsZoom: true,
                 bottomInset: keyboardVisible ? keyboardHeight : 0,
                 pointerSize: CGFloat(settings.pointerSize),
-                pointerStyle: settings.pointerStyle
+                pointerStyle: settings.pointerStyle,
+                touchMode: settings.inputMode == .touch
             )
             .overlay(alignment: .topTrailing) {
                 controls(showsKeyboardToggle: true)
@@ -71,8 +79,15 @@ struct SessionView: View {
     /// half, a keyboard and trackpad on the bottom half.
     private func duoLayout(size: CGSize) -> some View {
         VStack(spacing: 0) {
-            RemoteScreenView(client: client, pointerSize: CGFloat(settings.pointerSize),
-                pointerStyle: settings.pointerStyle)
+            // In touch mode the Mac screen itself takes taps; the deck
+            // below stays a trackpad either way.
+            RemoteScreenView(
+                client: client,
+                trackpad: settings.inputMode == .touch ? input.trackpadActions : nil,
+                pointerSize: CGFloat(settings.pointerSize),
+                pointerStyle: settings.pointerStyle,
+                touchMode: settings.inputMode == .touch
+            )
                 .frame(height: size.height * 0.48)
                 .overlay(alignment: .topTrailing) {
                     controls(showsKeyboardToggle: false)
