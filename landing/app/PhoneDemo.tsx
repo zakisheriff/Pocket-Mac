@@ -32,6 +32,9 @@ export default function PhoneDemo() {
           ref={video}
           className={styles.screen}
           src="/demo.mp4"
+          title="Pocket Mac demo: controlling a Mac from an iPhone 17 Pro"
+          aria-label="Pocket Mac connecting to a Mac, opening Safari and loading theatom.lk"
+          preload="metadata"
           poster="/demo-poster.jpg"
           autoPlay
           muted
