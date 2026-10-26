@@ -145,9 +145,7 @@ struct LoginSheet: View {
             name: name, address: address, username: trimmedUsername,
             password: rememberPassword ? password : nil
         )
-        connect(MacConnectionRequest(
-            endpoint: saved.endpoint, displayName: name, username: trimmedUsername, password: password
-        ))
+        connect(savedMacs.request(for: saved, password: password))
         dismiss()
     }
 }

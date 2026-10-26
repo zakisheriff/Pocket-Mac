@@ -15,6 +15,9 @@ struct SavedMac: Identifiable, Codable, Hashable {
     var name: String
     var address: Address
     var username: String
+    /// The IP that last answered, tried if Bonjour can't reach the Mac.
+    var lastKnownHost: String?
+    var lastKnownPort: UInt16?
 
     var endpoint: NWEndpoint {
         switch address {
@@ -23,6 +26,11 @@ struct SavedMac: Identifiable, Codable, Hashable {
         case .host(let host, let port):
             return .hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port) ?? 5900)
         }
+    }
+
+    var fallbackEndpoints: [NWEndpoint] {
+        guard case .bonjour = address, let host = lastKnownHost else { return [] }
+        return [.hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: lastKnownPort ?? 5900) ?? 5900)]
     }
 
     var subtitle: String {
@@ -75,6 +83,29 @@ final class SavedMacStore: ObservableObject {
         }
         persist()
         return mac
+    }
+
+    func recordReachedAddress(_ host: String, port: UInt16, for id: UUID) {
+        guard let index = macs.firstIndex(where: { $0.id == id }) else { return }
+        guard macs[index].lastKnownHost != host || macs[index].lastKnownPort != port else { return }
+        macs[index].lastKnownHost = host
+        macs[index].lastKnownPort = port
+        persist()
+    }
+
+    /// A connection request that tries Bonjour first, then the last address
+    /// that worked, and remembers whichever answers.
+    func request(for mac: SavedMac, password: String) -> MacConnectionRequest {
+        MacConnectionRequest(
+            endpoint: mac.endpoint,
+            fallbacks: mac.fallbackEndpoints,
+            displayName: mac.name,
+            username: mac.username,
+            password: password,
+            onReachedAddress: { [weak self] host, port in
+                self?.recordReachedAddress(host, port: port, for: mac.id)
+            }
+        )
     }
 
     func remove(_ mac: SavedMac) {

@@ -177,10 +177,8 @@ struct ConnectView: View {
             loginTarget = .saved(mac)
             return
         }
-        savedMacs.save(name: mac.name, address: mac.address, username: mac.username, password: password)
-        client.connect(MacConnectionRequest(
-            endpoint: mac.endpoint, displayName: mac.name, username: mac.username, password: password
-        ))
+        let saved = savedMacs.save(name: mac.name, address: mac.address, username: mac.username, password: password)
+        client.connect(savedMacs.request(for: saved, password: password))
     }
 }
 
