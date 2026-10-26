@@ -8,6 +8,25 @@ struct SettingsSheet: View {
         NavigationStack {
             Form {
                 Section {
+                    Picker("Control", selection: Binding(
+                        get: { settings.inputMode },
+                        set: { settings.inputMode = $0 }
+                    )) {
+                        ForEach(InputMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: settings.inputModeRaw) { HapticsManager.selectionChanged() }
+                } header: {
+                    Text("Control")
+                } footer: {
+                    Text(settings.inputMode == .touch
+                         ? "Touch: no pointer — tap an app or button to click it, swipe to scroll, hold and drag to move things. Like a touchscreen Mac."
+                         : "Trackpad: slide to move the pointer and tap to click, just like a MacBook trackpad.")
+                }
+
+                Section {
                     Picker("Layout", selection: Binding(
                         get: { settings.layoutMode },
                         set: { settings.layoutMode = $0 }
@@ -25,6 +44,7 @@ struct SettingsSheet: View {
                     Text("iPhone: the Mac fills the screen and the whole screen is your trackpad. iPhone Duo: hold the phone upright like an open laptop — the Mac on top, keyboard and trackpad below.")
                 }
 
+                if settings.inputMode == .trackpad {
                 Section("Pointer") {
                     HStack(spacing: 10) {
                         ForEach(PointerStyle.allCases) { style in
@@ -62,16 +82,27 @@ struct SettingsSheet: View {
                             HapticsManager.selectionChanged()
                         }
                     }
+                }
+                }
+
+                Section("Scrolling") {
                     Toggle("Reverse Scrolling", isOn: $settings.reverseScrolling)
                         .onChange(of: settings.reverseScrolling) { HapticsManager.selectionChanged() }
                 }
 
                 Section("How to Use") {
-                    GuideRow(symbol: "hand.point.up.left", title: "Move the pointer", detail: "Slide one finger anywhere")
-                    GuideRow(symbol: "hand.tap", title: "Click", detail: "Tap once — tap twice to double-click")
-                    GuideRow(symbol: "hand.tap.fill", title: "Right-click", detail: "Tap with two fingers")
-                    GuideRow(symbol: "hand.draw", title: "Drag or select text", detail: "Press and hold, then slide")
-                    GuideRow(symbol: "arrow.up.and.down", title: "Scroll", detail: "Slide two fingers")
+                    if settings.inputMode == .touch {
+                        GuideRow(symbol: "hand.tap", title: "Click", detail: "Tap right on it — tap twice to open")
+                        GuideRow(symbol: "hand.tap.fill", title: "Right-click", detail: "Tap with two fingers")
+                        GuideRow(symbol: "hand.draw", title: "Drag, move or select", detail: "Press and hold, then slide")
+                        GuideRow(symbol: "arrow.up.and.down", title: "Scroll", detail: "Swipe with one finger")
+                    } else {
+                        GuideRow(symbol: "hand.point.up.left", title: "Move the pointer", detail: "Slide one finger anywhere")
+                        GuideRow(symbol: "hand.tap", title: "Click", detail: "Tap once — tap twice to double-click")
+                        GuideRow(symbol: "hand.tap.fill", title: "Right-click", detail: "Tap with two fingers")
+                        GuideRow(symbol: "hand.draw", title: "Drag or select text", detail: "Press and hold, then slide")
+                        GuideRow(symbol: "arrow.up.and.down", title: "Scroll", detail: "Slide two fingers")
+                    }
                     GuideRow(symbol: "plus.magnifyingglass", title: "Zoom", detail: "Pinch with two fingers")
                     GuideRow(symbol: "arrow.up.and.down.and.arrow.left.and.right", title: "Move around when zoomed", detail: "Slide two fingers")
                     GuideRow(symbol: "command", title: "Shortcuts like ⌘C", detail: "Tap ⌘ then the key — double-tap a modifier to lock it")
