@@ -300,38 +300,80 @@ final class RFBClient: ObservableObject {
     }
 }
 
-/// Prints how the session is performing to the Xcode console every couple of
-/// seconds: frames per second, data rate and which screen formats the Mac
-/// chose — the numbers needed to tell where any lag comes from.
-private struct SessionStats {
+/// Watches the screen stream from a side task: nudges the Mac with a fresh
+/// update request whenever updates stop arriving (so the picture can never
+/// freeze), and prints frames per second, data rate and screen formats to
+/// the Xcode console every couple of seconds — even when nothing arrives.
+private final class SessionMonitor: @unchecked Sendable {
     private static let log = Logger(subsystem: "com.zakisheriff.pocketmac", category: "session")
-    var screenSize = ""
+    private let lock = NSLock()
+    private var lastUpdate = Date()
+    private var lastNudge = Date.distantPast
     private var frames = 0
     private var bytes = 0
     private var bytesByEncoding: [Int32: Int] = [:]
     private var windowStart = Date()
+    private var screen = (width: 0, height: 0)
+    private var nudges = 0
 
-    mutating func record(encoding: Int32, bytes count: Int) {
-        bytes += count
-        bytesByEncoding[encoding, default: 0] += count
+    func setScreen(width: Int, height: Int) {
+        lock.withLock { screen = (width, height) }
     }
 
-    mutating func frameDone() {
-        frames += 1
-        let elapsed = Date().timeIntervalSince(windowStart)
-        guard elapsed >= 2 else { return }
-        let fps = Double(frames) / elapsed
-        let rate = Double(bytes) / elapsed / 1_048_576
-        let mix = bytesByEncoding.sorted { $0.value > $1.value }.map { encoding, count in
-            "\(Self.name(encoding)) \(bytes > 0 ? count * 100 / bytes : 0)%"
-        }.joined(separator: ", ")
-        let line = String(format: "Pocket Mac: %.1f fps · %.2f MB/s · screen %@ · %@", fps, rate, screenSize, mix)
+    var screenSize: (width: Int, height: Int) { lock.withLock { screen } }
+
+    func updateArrived() {
+        lock.withLock { lastUpdate = Date() }
+    }
+
+    func record(encoding: Int32, bytes count: Int) {
+        lock.withLock {
+            bytes += count
+            bytesByEncoding[encoding, default: 0] += count
+        }
+    }
+
+    func frameDone() {
+        lock.withLock {
+            frames += 1
+            lastUpdate = Date()
+        }
+    }
+
+    /// True when the stream has been quiet long enough to ask again.
+    func shouldNudge(after quiet: TimeInterval) -> Bool {
+        lock.withLock {
+            let now = Date()
+            guard now.timeIntervalSince(lastUpdate) >= quiet, now.timeIntervalSince(lastNudge) >= quiet else { return false }
+            lastNudge = now
+            nudges += 1
+            return true
+        }
+    }
+
+    func reportIfDue() {
+        let line: String? = lock.withLock {
+            let elapsed = Date().timeIntervalSince(windowStart)
+            guard elapsed >= 2 else { return nil }
+            let fps = Double(frames) / elapsed
+            let rate = Double(bytes) / elapsed / 1_048_576
+            let mix = bytesByEncoding.sorted { $0.value > $1.value }.map { encoding, count in
+                "\(Self.name(encoding)) \(bytes > 0 ? count * 100 / bytes : 0)%"
+            }.joined(separator: ", ")
+            let text = String(
+                format: "Pocket Mac: %.1f fps · %.2f MB/s · screen %dx%d · %@ · re-asked %d×",
+                fps, rate, screen.width, screen.height, mix.isEmpty ? "no updates" : mix, nudges
+            )
+            frames = 0
+            bytes = 0
+            nudges = 0
+            bytesByEncoding = [:]
+            windowStart = Date()
+            return text
+        }
+        guard let line else { return }
         Self.log.notice("\(line, privacy: .public)")
         print(line)
-        frames = 0
-        bytes = 0
-        bytesByEncoding = [:]
-        windowStart = Date()
     }
 
     private static func name(_ encoding: Int32) -> String {
@@ -375,7 +417,7 @@ private final class RFBSession {
     private let zrle = ZRLEDecoder()
     private let zlibRects = ZlibRectDecoder()
     private let frameGate = FrameGate()
-    private var stats = SessionStats()
+    private let monitor = SessionMonitor()
 
     init(stream: RFBStream, request: MacConnectionRequest, client: RFBClient?) {
         self.stream = stream
@@ -422,10 +464,24 @@ private final class RFBSession {
             RFBEncoding.copyRect, RFBEncoding.raw,
             RFBEncoding.cursor, RFBEncoding.desktopSize,
         ]))
-        stats.screenSize = "\(width)x\(height)"
+        monitor.setScreen(width: width, height: height)
         requestUpdate(incremental: false)
         let displayName = name.isEmpty ? request.displayName : name
         onMain { $0.sessionStarted(stream: stream, name: displayName, framebuffer: framebuffer) }
+
+        let watchdog = Task.detached(priority: .userInitiated) { [monitor] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                if monitor.shouldNudge(after: 0.25) {
+                    let size = monitor.screenSize
+                    stream.enqueue(RFBClientMessage.framebufferUpdateRequest(
+                        incremental: true, x: 0, y: 0, width: UInt16(size.width), height: UInt16(size.height)
+                    ))
+                }
+                monitor.reportIfDue()
+            }
+        }
+        defer { watchdog.cancel() }
 
         while !Task.isCancelled {
             try await readServerMessage()
@@ -535,10 +591,7 @@ private final class RFBSession {
         _ = try await stream.readU8()
         let rectangles = Int(try await stream.readU16())
         let stream = self.stream
-
-        // Ask for the next frame now, so the Mac prepares it while this one
-        // is still downloading and decoding — removes a full round trip.
-        requestUpdate(incremental: true)
+        monitor.updateArrived()
 
         for _ in 0..<rectangles {
             let x = Int(try await stream.readU16())
@@ -574,13 +627,17 @@ private final class RFBSession {
                 }
             case RFBEncoding.desktopSize:
                 framebuffer.resize(width: width, height: height)
+                monitor.setScreen(width: width, height: height)
             default:
                 throw RFBError.unsupportedEncoding(encoding)
             }
-            stats.record(encoding: encoding, bytes: await stream.totalBytesRead - bytesBefore)
+            monitor.record(encoding: encoding, bytes: await stream.totalBytesRead - bytesBefore)
         }
 
-        stats.frameDone()
+        monitor.frameDone()
+        // Ask for the next frame once this one is fully in, as macOS expects
+        // (a request sent mid-update can be dropped, freezing the picture).
+        requestUpdate(incremental: true)
         publishFrame()
     }
 
