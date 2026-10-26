@@ -23,6 +23,8 @@ final class FakeRFBServer {
     }
 
     let port: UInt16
+    /// How the screen is sent: raw, hextile or zlib.
+    var screenEncoding: Int32 = RFBEncoding.raw
     private let listenSocket: Int32
     private let login: Login
     private let width: Int
@@ -193,9 +195,31 @@ final class FakeRFBServer {
         data.appendBE(UInt16(0))
         data.appendBE(UInt16(width))
         data.appendBE(UInt16(height))
-        data.appendBE(RFBEncoding.raw)
-        for pixel in pixels {
-            data.append(contentsOf: withUnsafeBytes(of: pixel.littleEndian, Array.init))
+        data.appendBE(screenEncoding)
+
+        func bytes(_ pixel: UInt32) -> [UInt8] { withUnsafeBytes(of: pixel.littleEndian, Array.init) }
+        var raw = Data()
+        for pixel in pixels { raw.append(contentsOf: bytes(pixel)) }
+
+        switch screenEncoding {
+        case RFBEncoding.hextile:
+            // One tile (the screen is under 16×16): background is pixel 0,
+            // every other pixel is a 1×1 coloured subrect.
+            precondition(width <= 16 && height <= 16)
+            data.append(2 | 8 | 16)
+            data.append(contentsOf: bytes(pixels[0]))
+            data.append(UInt8(pixels.count - 1))
+            for index in 1..<pixels.count {
+                data.append(contentsOf: bytes(pixels[index]))
+                data.append(UInt8((index % width) << 4 | (index / width)))
+                data.append(0)
+            }
+        case RFBEncoding.zlib:
+            let compressed = zlibCompress([UInt8](raw))
+            data.appendBE(UInt32(compressed.count))
+            data.append(compressed)
+        default:
+            data.append(raw)
         }
         return data
     }

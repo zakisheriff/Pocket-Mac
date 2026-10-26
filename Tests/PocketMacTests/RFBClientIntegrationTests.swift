@@ -84,6 +84,28 @@ final class RFBClientIntegrationTests: XCTestCase {
         XCTAssertEqual(client.state, .disconnected)
     }
 
+    func testHextileAndZlibScreensDecodeExactly() async throws {
+        for encoding in [RFBEncoding.hextile, RFBEncoding.zlib] {
+            let server = try FakeRFBServer(login: .vncPassword("pw123456"), width: 3, height: 2, pixels: screenPixels)
+            server.screenEncoding = encoding
+            server.start()
+            let client = RFBClient()
+            client.connect(request(port: server.port, username: "", password: "pw123456"))
+            do {
+                try await waitUntil { client.hasScreen }
+            } catch {
+                XCTFail("encoding \(encoding): never received the screen; state = \(client.state)")
+                continue
+            }
+            let screen = try XCTUnwrap(client.snapshot())
+            for (index, expected) in screenPixels.enumerated() {
+                XCTAssertEqual(rgb(screen, x: index % 3, y: index / 3), expected, "encoding \(encoding) pixel \(index)")
+            }
+            XCTAssertTrue(server.requestedEncodings.contains(encoding))
+            client.disconnect()
+        }
+    }
+
     func testVNCPasswordLoginIsUsedWhenNoUsernameIsGiven() async throws {
         let server = try FakeRFBServer(login: .vncPassword("pw123456"), width: 3, height: 2, pixels: screenPixels)
         server.start()
