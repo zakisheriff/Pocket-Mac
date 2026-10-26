@@ -166,7 +166,7 @@ final class RemoteScreenUIView: UIView, RemoteDisplaySink {
     fileprivate func tick() {
         guard needsDraw else { return }
         if usesMetal {
-            needsDraw = !(metal?.draw() ?? true)
+            needsDraw = !(metal?.draw { [weak self] in self?.needsDraw = true } ?? true)
         } else if let surface {
             needsDraw = false
             withoutAnimation {
@@ -292,6 +292,7 @@ final class RemoteScreenUIView: UIView, RemoteDisplaySink {
     private func layoutScreen() {
         guard screenSize.width > 0, screenSize.height > 0, bounds.width > 0 else {
             screenLayer.frame = .zero
+            metal?.layer.frame = .zero
             pointerLayer.isHidden = true
             return
         }

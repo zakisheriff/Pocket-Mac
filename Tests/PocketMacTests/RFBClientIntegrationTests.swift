@@ -22,7 +22,10 @@ final class RFBClientIntegrationTests: XCTestCase {
     private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
-            if Date() > deadline { throw XCTSkip("condition not met in time") }
+            if Date() > deadline {
+                XCTFail("condition not met within \(timeout)s")
+                throw NSError(domain: "RFBClientIntegrationTests.Timeout", code: 1)
+            }
             try await Task.sleep(for: .milliseconds(20))
         }
     }
@@ -53,6 +56,7 @@ final class RFBClientIntegrationTests: XCTestCase {
         XCTAssertEqual(rgb(screen, x: 0, y: 0), 0xff0000)
         XCTAssertEqual(rgb(screen, x: 2, y: 1), 0x808080)
 
+        XCTAssertEqual(server.requestedEncodings.first, RFBEncoding.copyRect)
         XCTAssertTrue(server.requestedEncodings.contains(RFBEncoding.zrle))
         XCTAssertTrue(server.requestedEncodings.contains(RFBEncoding.cursor))
 
@@ -162,6 +166,102 @@ final class RFBClientIntegrationTests: XCTestCase {
             XCTAssertTrue(server.requestedEncodings.contains(encoding))
             client.disconnect()
         }
+    }
+
+    /// The old per-field actor hops made a single Retina Hextile frame take
+    /// hundreds of milliseconds even over loopback, before drawing started.
+    func testRetinaHextileScreenArrivesWithoutDecoderBacklog() async throws {
+        let width = 3024, height = 1964
+        var update = Data([0, 0, 0, 1])
+        for value in [0, 0, width, height] { update.appendBE(UInt16(value)) }
+        update.appendBE(RFBEncoding.hextile)
+        for y in stride(from: 0, to: height, by: 16) {
+            for x in stride(from: 0, to: width, by: 16) {
+                if (x / 16 + y / 16) % 5 == 0 {
+                    update.append(1) // raw photo tile
+                    update.append(Data(repeating: 0x7f, count: min(16, width - x) * min(16, height - y) * 4))
+                } else {
+                    update.append(contentsOf: [2, 0x33, 0x22, 0x11, 0]) // solid desktop tile
+                }
+            }
+        }
+        let server = try FakeRFBServer(login: .vncPassword("pw123456"), width: width, height: height,
+                                       pixels: [UInt32](repeating: 0, count: width * height))
+        server.screenUpdateOverride = update
+        server.start()
+        let client = RFBClient()
+        defer { client.disconnect() }
+        client.connect(request(port: server.port, username: "", password: "pw123456"))
+        try await waitUntil { client.hasScreen }
+        let elapsed = Date().timeIntervalSince(try XCTUnwrap(server.screenStartedAt))
+        print("Retina Hextile receive + decode: \(elapsed)s")
+        XCTAssertLessThan(elapsed, 0.25, "one frame must not build a screen-update backlog")
+        let screen = try XCTUnwrap(client.snapshot())
+        XCTAssertEqual(rgb(screen, x: 0, y: 0), 0x7f7f7f)
+        XCTAssertEqual(rgb(screen, x: 16, y: 0), 0x112233)
+        XCTAssertEqual(rgb(screen, x: width - 1, y: height - 1), 0x7f7f7f)
+    }
+
+    func testFragmentedHextileCarriesColoursAndPreservesFollowingMessages() async throws {
+        // Six tiles, including partial right/bottom edges, raw pixels and
+        // both subrectangle modes. Send byte by byte and in larger chunks.
+        for chunkSize in [1, 7, 4096] {
+            let width = 35, height = 18
+            var update = Data([0, 0, 0, 1])
+            for value in [0, 0, width, height] { update.appendBE(UInt16(value)) }
+            update.appendBE(RFBEncoding.hextile)
+            update.append(contentsOf: [14, 0x33, 0x22, 0x11, 0, 0x66, 0x55, 0x44, 0, 1, 0x12, 0x23])
+            update.append(contentsOf: [8, 1, 0x00, 0x00]) // carry both colours into tile 2
+            update.append(contentsOf: [24, 1, 0x99, 0x88, 0x77, 0, 0x20, 0x01]) // coloured edge tile
+            update.append(1)
+            update.append(Data(repeating: 0xaa, count: 16 * 2 * 4)) // raw tile invalidates carried colours
+            update.append(contentsOf: [6, 0x33, 0x22, 0x11, 0, 0x66, 0x55, 0x44, 0]) // fresh background/foreground
+            update.append(contentsOf: [8, 1, 0x00, 0x11]) // carried foreground at bottom right
+            // A second update in the same TCP buffer catches over-reading.
+            update.append(contentsOf: [0, 0, 0, 1])
+            for value in [34, 17, 1, 1] { update.appendBE(UInt16(value)) }
+            update.appendBE(RFBEncoding.raw)
+            update.append(contentsOf: [0xef, 0xcd, 0xab, 0])
+
+            let server = try FakeRFBServer(login: .vncPassword("pw123456"), width: width, height: height,
+                                           pixels: [UInt32](repeating: 0, count: width * height))
+            server.screenUpdateOverride = update
+            server.screenChunkSize = chunkSize
+            server.screenChunkDelay = chunkSize == 1 ? 100 : 0
+            server.start()
+            let client = RFBClient()
+            defer { client.disconnect() }
+            client.connect(request(port: server.port, username: "", password: "pw123456"))
+            try await waitUntil { server.updateRequests >= 3 }
+            let screen = try XCTUnwrap(client.snapshot())
+            XCTAssertEqual(rgb(screen, x: 0, y: 0), 0x112233)
+            XCTAssertEqual(rgb(screen, x: 1, y: 2), 0x445566)
+            XCTAssertEqual(rgb(screen, x: 16, y: 0), 0x445566)
+            XCTAssertEqual(rgb(screen, x: 34, y: 1), 0x778899)
+            XCTAssertEqual(rgb(screen, x: 0, y: 17), 0xaaaaaa)
+            XCTAssertEqual(rgb(screen, x: 16, y: 17), 0x112233)
+            XCTAssertEqual(rgb(screen, x: 33, y: 17), 0x445566)
+            XCTAssertEqual(rgb(screen, x: 34, y: 17), 0xabcdef)
+        }
+    }
+
+    func testMalformedHextileSubrectangleFailsTheSession() async throws {
+        let server = try FakeRFBServer(login: .vncPassword("pw123456"), width: 3, height: 2, pixels: screenPixels)
+        var update = Data([0, 0, 0, 1])
+        for value in [0, 0, 3, 2] { update.appendBE(UInt16(value)) }
+        update.appendBE(RFBEncoding.hextile)
+        update.append(contentsOf: [8, 1, 0x21, 0x11]) // 2×2 at (2,1), outside a 3×2 tile
+        server.screenUpdateOverride = update
+        server.start()
+        let client = RFBClient()
+        defer { client.disconnect() }
+        client.connect(request(port: server.port, username: "", password: "pw123456"))
+        try await waitUntil {
+            if case .failed = client.state { return true }
+            return false
+        }
+        guard case .failed(let message) = client.state else { return XCTFail("expected malformed data to fail") }
+        XCTAssertTrue(message.contains("hextile subrect outside its tile"), message)
     }
 
     func testVNCPasswordLoginIsUsedWhenNoUsernameIsGiven() async throws {

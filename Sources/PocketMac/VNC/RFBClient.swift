@@ -533,10 +533,11 @@ private final class RFBSession {
         let framebuffer = RFBFramebuffer(width: width, height: height)
         self.framebuffer = framebuffer
         stream.enqueue(RFBClientMessage.setPixelFormat(.bgrx))
-        // Most compact first; the Mac picks the first one it supports.
+        // Prefer moving pixels already on the phone for window drags and
+        // scrolling, then compressed encodings for newly exposed content.
         stream.enqueue(RFBClientMessage.setEncodings([
-            RFBEncoding.zrle, RFBEncoding.zlib, RFBEncoding.hextile,
-            RFBEncoding.copyRect, RFBEncoding.raw,
+            RFBEncoding.copyRect, RFBEncoding.zrle, RFBEncoding.zlib,
+            RFBEncoding.hextile, RFBEncoding.raw,
             RFBEncoding.cursor, RFBEncoding.desktopSize,
         ]))
         monitor.setScreen(width: width, height: height)

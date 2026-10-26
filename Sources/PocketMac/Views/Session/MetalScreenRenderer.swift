@@ -11,6 +11,7 @@ final class MetalScreenRenderer {
     private let device: MTLDevice
     private let queue: MTLCommandQueue
     private var texture: MTLTexture?
+    private let worker = MetalFrameWorker()
 
     /// nil when this device can't do it; the caller falls back to images.
     init?() {
@@ -26,8 +27,8 @@ final class MetalScreenRenderer {
         layer.minificationFilter = .linear
         layer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
         layer.maximumDrawableCount = 3
-        // Never stall the main thread (and with it, touch input) waiting
-        // for a drawable: skip the frame and draw the next tick instead.
+        // This timeout is up to one second, not a nonblocking poll. Drawable
+        // acquisition must run on the render worker, never the input thread.
         layer.allowsNextDrawableTimeout = true
         layer.presentsWithTransaction = false
         layer.backgroundColor = CGColor(gray: 0, alpha: 1)
@@ -50,36 +51,61 @@ final class MetalScreenRenderer {
         }
         self.texture = texture
         layer.drawableSize = CGSize(width: width, height: height)
-        draw()
         return true
     }
 
-    /// Frames on the GPU not yet shown; one is enough, more only adds delay.
-    private var inFlight = 0
-
-    /// Returns false if the frame was skipped (the GPU is still busy with
-    /// the last one), so the caller can try again next screen refresh.
+    /// Submit at most one frame. A busy GPU never queues old frames or
+    /// blocks touches; the display link retries with the latest pixels.
     @discardableResult
-    func draw() -> Bool {
+    func draw(retry: @escaping @MainActor () -> Void) -> Bool {
         guard let texture else { return true }
-        guard inFlight == 0 else { return false }
-        guard let drawable = layer.nextDrawable(),
-              let commands = queue.makeCommandBuffer(),
-              let blit = commands.makeBlitCommandEncoder() else { return false }
-        blit.copy(
-            from: texture, sourceSlice: 0, sourceLevel: 0,
-            sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-            sourceSize: MTLSize(width: texture.width, height: texture.height, depth: 1),
-            to: drawable.texture, destinationSlice: 0, destinationLevel: 0,
-            destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
-        )
-        blit.endEncoding()
-        commands.present(drawable)
-        inFlight += 1
-        commands.addCompletedHandler { [weak self] _ in
-            DispatchQueue.main.async { self?.inFlight -= 1 }
+        return worker.submit(texture: texture, layer: layer, queue: queue, retry: retry)
+    }
+}
+
+/// Only immutable frame references cross onto the render queue. The lock
+/// covers the single in-flight slot, shared with the GPU completion callback.
+private final class MetalFrameWorker: @unchecked Sendable {
+    private let renderQueue = DispatchQueue(label: "com.zakisheriff.pocketmac.render", qos: .userInteractive)
+    private let lock = NSLock()
+    private var busy = false
+
+    func submit(texture: MTLTexture, layer: CAMetalLayer, queue: MTLCommandQueue,
+                retry: @escaping @MainActor () -> Void) -> Bool {
+        let accepted = lock.withLock {
+            guard !busy else { return false }
+            busy = true
+            return true
         }
-        commands.commit()
+        guard accepted else { return false }
+        renderQueue.async { [self] in
+            autoreleasepool {
+                guard let drawable = layer.nextDrawable(),
+                      drawable.texture.width == texture.width,
+                      drawable.texture.height == texture.height,
+                      let commands = queue.makeCommandBuffer(),
+                      let blit = commands.makeBlitCommandEncoder() else {
+                    finish()
+                    DispatchQueue.main.async { retry() }
+                    return
+                }
+                blit.copy(
+                    from: texture, sourceSlice: 0, sourceLevel: 0,
+                    sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                    sourceSize: MTLSize(width: texture.width, height: texture.height, depth: 1),
+                    to: drawable.texture, destinationSlice: 0, destinationLevel: 0,
+                    destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
+                )
+                blit.endEncoding()
+                commands.present(drawable)
+                commands.addCompletedHandler { [self] _ in finish() }
+                commands.commit()
+            }
+        }
         return true
+    }
+
+    private func finish() {
+        lock.withLock { busy = false }
     }
 }

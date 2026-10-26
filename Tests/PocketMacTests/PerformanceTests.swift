@@ -1,4 +1,6 @@
 import XCTest
+import Metal
+import QuartzCore
 @testable import Pocket_Mac
 
 /// Budgets for a full Retina MacBook screen (3024×1964). The decoder runs
@@ -53,6 +55,29 @@ final class PerformanceTests: XCTestCase {
         _ = framebuffer.makeLiveImage()
         let elapsed = time { for _ in 0..<100 { _ = framebuffer.makeLiveImage() } }
         XCTAssertLessThan(elapsed / 100, 0.001, "making a frame image took \(elapsed / 100)s")
+    }
+
+    /// Exhaust the drawable pool deliberately. Rendering used to wait up to
+    /// a second here on the same thread that handles trackpad input.
+    @MainActor
+    func testDrawableBackpressureDoesNotBlockInput() async throws {
+        let renderer = try XCTUnwrap(MetalScreenRenderer())
+        let framebuffer = RFBFramebuffer(width: 64, height: 64)
+        XCTAssertTrue(renderer.setSurface(framebuffer.surface, width: 64, height: 64))
+        renderer.layer.maximumDrawableCount = 2
+        var heldDrawables: [CAMetalDrawable] = [
+            try XCTUnwrap(renderer.layer.nextDrawable()),
+            try XCTUnwrap(renderer.layer.nextDrawable()),
+        ]
+        let elapsed = time { XCTAssertTrue(renderer.draw(retry: {})) }
+        XCTAssertLessThan(elapsed, 0.05, "GPU backpressure must not block touch handling")
+        // The busy worker must reject another frame instead of queuing it.
+        XCTAssertFalse(renderer.draw(retry: {}))
+        let input = expectation(description: "main thread handles input while GPU is blocked")
+        DispatchQueue.main.async { input.fulfill() }
+        await fulfillment(of: [input], timeout: 0.25)
+        XCTAssertEqual(heldDrawables.count, 2)
+        heldDrawables.removeAll()
     }
 
     // MARK: Frame builder

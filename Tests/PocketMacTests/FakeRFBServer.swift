@@ -28,6 +28,10 @@ final class FakeRFBServer {
     /// Send a frame for every update request (a live, changing screen)
     /// instead of only the first.
     var answersEveryRequest = false
+    /// Prebuilt payloads keep server-side frame construction out of latency tests.
+    var screenUpdateOverride: Data?
+    var screenChunkSize = Int.max
+    var screenChunkDelay: useconds_t = 0
     /// Silently ignore this many update requests, like macOS does when one
     /// arrives while it's busy sending.
     var requestsToDrop = 0
@@ -45,6 +49,8 @@ final class FakeRFBServer {
     private var _requestedEncodings: [Int32] = []
     private var _updateRequests = 0
     private var _framesSent = 0
+    private var _screenStartedAt: Date?
+    var screenStartedAt: Date? { lock.withLock { _screenStartedAt } }
     private var _pointerTimes: [Date] = []
     private var _connections = 0
     var connections: Int { lock.withLock { _connections } }
@@ -192,7 +198,12 @@ final class FakeRFBServer {
                 }
                 if !sentScreen || answersEveryRequest {
                     sentScreen = true
-                    send(fd, rawScreenUpdate())
+                    let update = screenUpdateOverride ?? rawScreenUpdate()
+                    lock.withLock { if _screenStartedAt == nil { _screenStartedAt = Date() } }
+                    for offset in stride(from: 0, to: update.count, by: screenChunkSize) {
+                        send(fd, update.subdata(in: offset..<min(offset + screenChunkSize, update.count)))
+                        if screenChunkDelay > 0 { usleep(screenChunkDelay) }
+                    }
                     lock.withLock { _framesSent += 1 }
                 }
             case 4:

@@ -149,20 +149,45 @@ actor RFBStream {
 
     func read(_ count: Int) async throws -> Data {
         guard count > 0 else { return Data() }
+        try await ensureBuffered(count)
+        let start = buffer.startIndex + readOffset
+        let result = buffer.subdata(in: start..<(start + count))
+        consume(count)
+        return result
+    }
+
+    /// Wait only for bytes the parser actually needs. TCP may deliver a tile
+    /// in several packets, or many tiles and the next message in one packet.
+    func ensureBuffered(_ count: Int) async throws {
         while buffer.count - readOffset < count {
             let needed = count - (buffer.count - readOffset)
             let chunk = try await receive(maximum: max(needed, 256 * 1024))
             buffer.append(chunk)
         }
-        let start = buffer.startIndex + readOffset
-        let result = buffer.subdata(in: start..<(start + count))
+    }
+
+    /// Decode all complete tiles already received without allocating Data or
+    /// hopping between executors for each field. The parser leaves a partial
+    /// tile untouched and reports how many bytes it consumed.
+    func withBufferedBytes<T>(_ body: (UnsafeRawBufferPointer, inout Int) throws -> T) rethrows -> T {
+        var consumed = 0
+        let result = try buffer.withUnsafeBytes { bytes in
+            try body(UnsafeRawBufferPointer(rebasing: bytes[readOffset...]), &consumed)
+        }
+        consume(consumed)
+        return result
+    }
+
+    private func consume(_ count: Int) {
         readOffset += count
         totalBytesRead += count
-        if readOffset > 1 << 20 || readOffset == buffer.count {
+        if readOffset == buffer.count {
+            buffer.removeAll(keepingCapacity: true)
+            readOffset = 0
+        } else if readOffset > 1 << 20 {
             buffer.removeSubrange(buffer.startIndex..<(buffer.startIndex + readOffset))
             readOffset = 0
         }
-        return result
     }
 
     func readU8() async throws -> UInt8 {
