@@ -32,10 +32,14 @@ final class FakeRFBServer {
     private var _pointerEvents: [PointerEvent] = []
     private var _keyEvents: [KeyEvent] = []
     private var _requestedEncodings: [Int32] = []
+    private var _updateRequests = 0
+    private var _pointerTimes: [Date] = []
 
     var pointerEvents: [PointerEvent] { lock.withLock { _pointerEvents } }
     var keyEvents: [KeyEvent] { lock.withLock { _keyEvents } }
     var requestedEncodings: [Int32] { lock.withLock { _requestedEncodings } }
+    var updateRequests: Int { lock.withLock { _updateRequests } }
+    var pointerTimes: [Date] { lock.withLock { _pointerTimes } }
 
     init(login: Login, width: Int, height: Int, pixels: [UInt32]) throws {
         precondition(pixels.count == width * height)
@@ -157,6 +161,7 @@ final class FakeRFBServer {
                 lock.withLock { _requestedEncodings = encodings }
             case 3:
                 guard read(fd, 9) != nil else { return }
+                lock.withLock { _updateRequests += 1 }
                 if !sentScreen {
                     sentScreen = true
                     send(fd, rawScreenUpdate())
@@ -168,7 +173,10 @@ final class FakeRFBServer {
             case 5:
                 guard let body = read(fd, 5) else { return }
                 let event = PointerEvent(buttons: body[body.startIndex], x: body.bigEndianU16(at: 1), y: body.bigEndianU16(at: 3))
-                lock.withLock { _pointerEvents.append(event) }
+                lock.withLock {
+                    _pointerEvents.append(event)
+                    _pointerTimes.append(Date())
+                }
             case 6:
                 guard let header = read(fd, 7) else { return }
                 guard read(fd, Int(header.bigEndianU32(at: 3))) != nil else { return }

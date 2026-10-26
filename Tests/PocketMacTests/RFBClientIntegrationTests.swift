@@ -40,7 +40,7 @@ final class RFBClientIntegrationTests: XCTestCase {
         client.connect(request(port: server.port, username: "zaki", password: "s3cret!"))
 
         do {
-            try await waitUntil { client.screen != nil }
+            try await waitUntil { client.hasScreen }
         } catch {
             XCTFail("never received the screen; state = \(client.state)")
             return
@@ -49,12 +49,15 @@ final class RFBClientIntegrationTests: XCTestCase {
         XCTAssertEqual(client.state, .connected)
         XCTAssertEqual(client.desktopName, "Fake Mac")
         XCTAssertEqual(client.screenSize, CGSize(width: 3, height: 2))
-        let screen = try XCTUnwrap(client.screen)
+        let screen = try XCTUnwrap(client.snapshot())
         XCTAssertEqual(rgb(screen, x: 0, y: 0), 0xff0000)
         XCTAssertEqual(rgb(screen, x: 2, y: 1), 0x808080)
 
         XCTAssertTrue(server.requestedEncodings.contains(RFBEncoding.zrle))
         XCTAssertTrue(server.requestedEncodings.contains(RFBEncoding.cursor))
+
+        // The next frame is requested as soon as one arrives, not after it's drawn.
+        try await waitUntil { server.updateRequests >= 2 }
 
         client.movePointer(to: CGPoint(x: 2, y: 1))
         client.click()
@@ -64,6 +67,9 @@ final class RFBClientIntegrationTests: XCTestCase {
             .init(buttons: 1, x: 2, y: 1),
             .init(buttons: 0, x: 2, y: 1),
         ])
+        // macOS samples the button state, so the press must be held briefly.
+        let times = server.pointerTimes.suffix(2)
+        XCTAssertGreaterThanOrEqual(times.last!.timeIntervalSince(times.first!), RFBClient.clickHoldDuration * 0.8)
 
         client.tapKey(0x61, modifiers: [.command])
         try await waitUntil { server.keyEvents.count >= 4 }
@@ -85,7 +91,7 @@ final class RFBClientIntegrationTests: XCTestCase {
         client.connect(request(port: server.port, username: "", password: "pw123456"))
 
         do {
-            try await waitUntil { client.screen != nil }
+            try await waitUntil { client.hasScreen }
         } catch {
             XCTFail("never received the screen; state = \(client.state)")
             return
@@ -112,7 +118,7 @@ final class RFBClientIntegrationTests: XCTestCase {
         guard case .failed(let message) = client.state else { return XCTFail("expected failure") }
         XCTAssertTrue(message.hasPrefix("Authentication failed."), message)
         XCTAssertTrue(message.contains("Screen Sharing"), message)
-        XCTAssertNil(client.screen)
+        XCTAssertFalse(client.hasScreen)
     }
 
     func testUnreachableMacFailsWithAHelpfulMessage() async throws {
