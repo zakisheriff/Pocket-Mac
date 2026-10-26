@@ -104,6 +104,10 @@ final class RFBClient: ObservableObject {
     }
 
     private var lastRequest: MacConnectionRequest?
+    /// Set while the app is in the background with a session to reopen.
+    private var resumesOnForeground = false
+    /// One silent retry when the Mac logs in but never sends its screen.
+    private var retriedStalledScreen = false
 
     func retry() {
         guard let lastRequest else { return }
@@ -112,6 +116,7 @@ final class RFBClient: ObservableObject {
 
     func connect(_ request: MacConnectionRequest) {
         lastRequest = request
+        resumesOnForeground = false
         disconnect(newState: .connecting)
         let stream = RFBStream(endpoints: request.endpoints)
         self.stream = stream
@@ -130,16 +135,43 @@ final class RFBClient: ObservableObject {
             } catch is CancellationError {
                 return
             } catch {
-                let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                await self?.sessionEnded(stream: stream, state: .failed(message))
+                await self?.sessionEnded(stream: stream, error: error)
                 return
             }
-            await self?.sessionEnded(stream: stream, state: .disconnected)
+            await self?.sessionEnded(stream: stream, error: nil)
         }
     }
 
     func disconnect() {
+        resumesOnForeground = false
         disconnect(newState: .disconnected)
+    }
+
+    /// iOS freezes a backgrounded app without closing its sockets, so the
+    /// Mac would keep serving a phone that can't answer — and stay stuck on
+    /// that dead session, refusing to send the screen to the next one until
+    /// Screen Sharing is switched off and on. Close it properly instead,
+    /// and pick the session back up on return.
+    func enterBackground() {
+        guard isActive, lastRequest != nil else { return }
+        let application = UIApplication.shared
+        var task = UIBackgroundTaskIdentifier.invalid
+        task = application.beginBackgroundTask(withName: "Close Mac session") {
+            application.endBackgroundTask(task)
+        }
+        disconnect(newState: .connecting)
+        resumesOnForeground = true
+        // Give the close a moment to reach the Mac before iOS suspends us.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            application.endBackgroundTask(task)
+        }
+    }
+
+    func enterForeground() {
+        guard resumesOnForeground else { return }
+        resumesOnForeground = false
+        retriedStalledScreen = false
+        retry()
     }
 
     func acknowledgeFailure() {
@@ -274,7 +306,10 @@ final class RFBClient: ObservableObject {
             shownSurface = framebuffer.surface
             for sink in sinks { sink.display(surface: framebuffer.surface, size: size) }
         }
-        if !hasScreen { hasScreen = true }
+        if !hasScreen {
+            hasScreen = true
+            retriedStalledScreen = false
+        }
         for sink in sinks { sink.frameUpdated() }
     }
 
@@ -292,11 +327,20 @@ final class RFBClient: ObservableObject {
         UIPasteboard.general.string = text
     }
 
-    fileprivate func sessionEnded(stream: RFBStream, state newState: State) {
+    fileprivate func sessionEnded(stream: RFBStream, error: Error?) {
         guard stream === self.stream else { return }
         stream.close()
         self.stream = nil
-        state = newState
+        if (error as? RFBError) == .screenNeverArrived, !retriedStalledScreen {
+            retriedStalledScreen = true
+            retry()
+            return
+        }
+        if let error {
+            state = .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+        } else {
+            state = .disconnected
+        }
     }
 }
 
@@ -315,6 +359,37 @@ private final class SessionMonitor: @unchecked Sendable {
     private var windowStart = Date()
     private var screen = (width: 0, height: 0)
     private var nudges = 0
+    private let startedAt = Date()
+    private var hasPixels = false
+    private var lastFullRequest = Date()
+    private(set) var stalled = false
+
+    func pixelsArrived() {
+        lock.withLock { hasPixels = true }
+    }
+
+    enum Nudge { case none, incremental, full, giveUp }
+
+    /// What the watchdog should do now. Until the first picture arrives it
+    /// re-asks for the whole screen (an incremental request for a screen we
+    /// never got can go unanswered); if the Mac never sends one, give up so
+    /// the session can be reopened.
+    func nextNudge(quiet: TimeInterval) -> Nudge {
+        let waiting: Nudge? = lock.withLock {
+            guard !hasPixels else { return nil }
+            let now = Date()
+            if now.timeIntervalSince(startedAt) > 8 {
+                stalled = true
+                return .giveUp
+            }
+            guard now.timeIntervalSince(lastFullRequest) >= 1 else { return Nudge.none }
+            lastFullRequest = now
+            nudges += 1
+            return .full
+        }
+        if let waiting { return waiting }
+        return shouldNudge(after: quiet) ? .incremental : .none
+    }
 
     func setScreen(width: Int, height: Int) {
         lock.withLock { screen = (width, height) }
@@ -472,19 +547,31 @@ private final class RFBSession {
         let watchdog = Task.detached(priority: .userInitiated) { [monitor] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(250))
-                if monitor.shouldNudge(after: 0.25) {
-                    let size = monitor.screenSize
+                let size = monitor.screenSize
+                func request(incremental: Bool) {
                     stream.enqueue(RFBClientMessage.framebufferUpdateRequest(
-                        incremental: true, x: 0, y: 0, width: UInt16(size.width), height: UInt16(size.height)
+                        incremental: incremental, x: 0, y: 0, width: UInt16(size.width), height: UInt16(size.height)
                     ))
+                }
+                switch monitor.nextNudge(quiet: 0.25) {
+                case .none: break
+                case .incremental: request(incremental: true)
+                case .full: request(incremental: false)
+                case .giveUp:
+                    stream.close() // ends the read loop below
+                    return
                 }
                 monitor.reportIfDue()
             }
         }
         defer { watchdog.cancel() }
 
-        while !Task.isCancelled {
-            try await readServerMessage()
+        do {
+            while !Task.isCancelled {
+                try await readServerMessage()
+            }
+        } catch {
+            throw monitor.stalled ? RFBError.screenNeverArrived : error
         }
         throw CancellationError()
     }
@@ -592,13 +679,17 @@ private final class RFBSession {
         let rectangles = Int(try await stream.readU16())
         let stream = self.stream
         monitor.updateArrived()
+        var changedScreen = false
 
         for _ in 0..<rectangles {
-            let x = Int(try await stream.readU16())
-            let y = Int(try await stream.readU16())
-            let width = Int(try await stream.readU16())
-            let height = Int(try await stream.readU16())
-            let encoding = try await stream.readS32()
+            // One read for the whole 12-byte header instead of five.
+            let header = try await stream.read(12)
+            let x = Int(header.bigEndianU16(at: 0))
+            let y = Int(header.bigEndianU16(at: 2))
+            let width = Int(header.bigEndianU16(at: 4))
+            let height = Int(header.bigEndianU16(at: 6))
+            let encoding = Int32(bitPattern: header.bigEndianU32(at: 8))
+            if encoding != RFBEncoding.cursor { changedScreen = true }
             let bytesBefore = await stream.totalBytesRead
 
             switch encoding {
@@ -638,6 +729,9 @@ private final class RFBSession {
         // Ask for the next frame once this one is fully in, as macOS expects
         // (a request sent mid-update can be dropped, freezing the picture).
         requestUpdate(incremental: true)
+        // A pointer-shape-only update isn't the screen: keep waiting for it.
+        guard changedScreen else { return }
+        monitor.pixelsArrived()
         publishFrame()
     }
 
