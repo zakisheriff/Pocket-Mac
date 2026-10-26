@@ -59,7 +59,7 @@ final class WindowManager: ObservableObject {
         bounce(kind)
         HapticsManager.appOpen()
 
-        let size = kind.defaultSize
+        let size = clampedSize(kind.defaultSize)
         let origin = spawnOrigin(for: size)
         var window = DesktopWindow(kind: kind, position: origin, size: size)
         window.isMinimized = false
@@ -121,7 +121,9 @@ final class WindowManager: ObservableObject {
     func resize(_ id: UUID, to newSize: CGSize) {
         guard let index = windows.firstIndex(where: { $0.id == id }) else { return }
         guard !windows[index].isFullscreen else { return }
-        windows[index].size = newSize
+        let maxWidth = max(canvasBounds.width - 8, 160)
+        let maxHeight = max(canvasBounds.height - 8, 120)
+        windows[index].size = CGSize(width: min(newSize.width, maxWidth), height: min(newSize.height, maxHeight))
     }
 
     private func clampedPosition(_ point: CGPoint, size: CGSize) -> CGPoint {
@@ -131,6 +133,18 @@ final class WindowManager: ObservableObject {
         let minY = canvasBounds.minY
         let maxY = canvasBounds.maxY - 24
         return CGPoint(x: min(max(point.x, minX), maxX), y: min(max(point.y, minY), maxY))
+    }
+
+    /// Shrinks a desktop-scale window size to fit the actual (phone-sized)
+    /// canvas, preserving aspect ratio so Safari/Finder/etc. still look
+    /// like real windows instead of clipped desktop-sized panes.
+    private func clampedSize(_ size: CGSize) -> CGSize {
+        guard canvasBounds != .zero else { return size }
+        let maxWidth = max(canvasBounds.width - 28, 160)
+        let maxHeight = max(canvasBounds.height - 56, 120)
+        guard size.width > maxWidth || size.height > maxHeight else { return size }
+        let scale = min(maxWidth / size.width, maxHeight / size.height)
+        return CGSize(width: size.width * scale, height: size.height * scale)
     }
 
     private func spawnOrigin(for size: CGSize) -> CGPoint {
