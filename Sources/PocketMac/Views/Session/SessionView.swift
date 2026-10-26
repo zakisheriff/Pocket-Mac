@@ -6,6 +6,8 @@ struct SessionView: View {
     @ObservedObject var settings: SettingsStore
     @StateObject private var input: SessionInputController
     @State private var keyboardVisible = false
+    @State private var showingGuide = false
+    @State private var showingSettings = false
 
     init(client: RFBClient, settings: SettingsStore) {
         self.client = client
@@ -27,6 +29,8 @@ struct SessionView: View {
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .overlay { statusOverlay }
+        .sheet(isPresented: $showingGuide) { GestureGuideSheet() }
+        .sheet(isPresented: $showingSettings) { SettingsSheet(settings: settings) }
         .onChange(of: client.state) { _, state in
             if state == .connected { HapticsManager.success() }
         }
@@ -47,7 +51,8 @@ struct SessionView: View {
                 client: client,
                 trackpad: input.trackpadActions,
                 allowsZoom: true,
-                bottomInset: keyboardVisible ? keyboardHeight : 0
+                bottomInset: keyboardVisible ? keyboardHeight : 0,
+                pointerSize: CGFloat(settings.pointerSize)
             )
             .overlay(alignment: .topTrailing) {
                 controls(showsKeyboardToggle: true)
@@ -67,7 +72,7 @@ struct SessionView: View {
     /// half, a keyboard and trackpad on the bottom half.
     private func duoLayout(size: CGSize) -> some View {
         VStack(spacing: 0) {
-            RemoteScreenView(client: client)
+            RemoteScreenView(client: client, pointerSize: CGFloat(settings.pointerSize))
                 .frame(height: size.height * 0.48)
                 .overlay(alignment: .topTrailing) {
                     controls(showsKeyboardToggle: false)
@@ -96,6 +101,26 @@ struct SessionView: View {
     private func controls(showsKeyboardToggle: Bool) -> some View {
         GlassEffectContainer(spacing: 10) {
             HStack(spacing: 10) {
+                Button {
+                    HapticsManager.tap()
+                    showingGuide = true
+                } label: {
+                    Image(systemName: "questionmark")
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .accessibilityLabel("How to use")
+
+                Button {
+                    HapticsManager.tap()
+                    showingSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .accessibilityLabel("Settings")
+
                 if showsKeyboardToggle {
                     Button {
                         HapticsManager.tap()
