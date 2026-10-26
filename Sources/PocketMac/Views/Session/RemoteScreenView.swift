@@ -11,15 +11,15 @@ struct RemoteScreenView: UIViewRepresentable {
     var bottomInset: CGFloat = 0
     var pointerSize: CGFloat = 24
     var pointerStyle: PointerStyle = .macArrow
+    /// Touch mode: no pointer, touches land right where the finger is.
+    var touchMode = false
 
     func makeUIView(context: Context) -> RemoteScreenUIView {
         let view = RemoteScreenUIView()
-        if trackpad != nil {
-            context.coordinator.handler.macPointsPerTouchPoint = { [weak view] in
-                1 / (view?.pointsPerMacPoint ?? 1)
-            }
-            context.coordinator.handler.attach(to: view)
+        context.coordinator.handler.macPointsPerTouchPoint = { [weak view] in
+            1 / (view?.pointsPerMacPoint ?? 1)
         }
+        context.coordinator.handler.attach(to: view)
         configure(view, context: context)
         client.addDisplay(view)
         return view
@@ -35,6 +35,10 @@ struct RemoteScreenView: UIViewRepresentable {
 
     private func configure(_ view: RemoteScreenUIView, context: Context) {
         view.client = client
+        let handler = context.coordinator.handler
+        handler.isEnabled = trackpad != nil
+        handler.macPoint = touchMode ? { [weak view] location in view?.macPoint(at: location) } : nil
+        view.showsPointer = !touchMode
         if var actions = trackpad {
             if allowsZoom {
                 actions.pinch = { [weak view] scale, center in view?.zoom(by: scale, around: center) }
@@ -46,7 +50,7 @@ struct RemoteScreenView: UIViewRepresentable {
                     if view.isZoomed { view.pan(by: delta) } else { scrollMac(delta) }
                 }
             }
-            context.coordinator.handler.actions = actions
+            handler.actions = actions
         }
         view.setPointer(style: pointerStyle, size: pointerSize)
         view.setBottomInset(bottomInset)
@@ -85,6 +89,22 @@ final class RemoteScreenUIView: UIView, RemoteDisplaySink {
     private var panOrigin: CGPoint = .zero
 
     var isZoomed: Bool { zoom > 1.01 }
+
+    /// Hidden in touch mode, where the finger is the pointer.
+    var showsPointer = true {
+        didSet {
+            guard showsPointer != oldValue else { return }
+            withoutAnimation { layoutScreen() }
+        }
+    }
+
+    /// The Mac screen point under a point in this view, or nil off-screen.
+    func macPoint(at location: CGPoint) -> CGPoint? {
+        let frame = currentScreenFrame()
+        guard frame.width > 0, frame.contains(location) else { return nil }
+        let scale = pointsPerMacPoint
+        return CGPoint(x: (location.x - frame.minX) / scale, y: (location.y - frame.minY) / scale)
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -141,7 +161,7 @@ final class RemoteScreenUIView: UIView, RemoteDisplaySink {
     func pointerMoved(to point: CGPoint) {
         pointer = point
         withoutAnimation {
-            if isZoomed { keepPointerVisible() }
+            if isZoomed && showsPointer { keepPointerVisible() }
             layoutScreen()
         }
     }
@@ -266,7 +286,7 @@ final class RemoteScreenUIView: UIView, RemoteDisplaySink {
 
         let scale = pointsPerMacPoint
         let tip = CGPoint(x: frame.minX + pointer.x * scale, y: frame.minY + pointer.y * scale)
-        pointerLayer.isHidden = false
+        pointerLayer.isHidden = !showsPointer
         if let cursor {
             let cursorScale = max(scale, 0.75)
             pointerLayer.frame = CGRect(
