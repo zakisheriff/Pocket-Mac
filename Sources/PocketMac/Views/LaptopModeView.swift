@@ -5,6 +5,7 @@ import SwiftUI
 struct LaptopModeView: View {
     @ObservedObject var windowManager: WindowManager
     @ObservedObject var keyboard: KeyboardInputManager
+    @EnvironmentObject private var settings: SettingsStore
     @StateObject private var cursor = CursorManager()
 
     var body: some View {
@@ -37,12 +38,18 @@ struct LaptopModeView: View {
             )
             .padding(6)
             .background(Color.black)
-            .onAppear {
-                cursor.setBounds(CGRect(origin: .zero, size: CGSize(width: proxy.size.width, height: proxy.size.height * 0.56)))
+            .onAppear { updateCursorBounds(for: proxy.size) }
+            .onChange(of: proxy.size) { _, newSize in updateCursorBounds(for: newSize) }
+            .onChange(of: settings.pointerSensitivity, initial: true) { _, value in
+                cursor.sensitivity = CGFloat(value)
             }
         }
         .background(Color.black)
         .ignoresSafeArea()
+    }
+
+    private func updateCursorBounds(for size: CGSize) {
+        cursor.setBounds(CGRect(origin: .zero, size: CGSize(width: size.width, height: size.height * 0.56)))
     }
 }
 
