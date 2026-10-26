@@ -5,32 +5,39 @@ import SwiftUI
 struct MacKeyboardView: View {
     @ObservedObject var input: SessionInputController
     var keyHeight: CGFloat = 38
-    var spacing: CGFloat = 5
+    var bottomPadding: CGFloat = 0
+
+    static let spacing: CGFloat = 5
+    static let topPadding: CGFloat = 8
+
+    /// Total height, known up front so the Mac screen can make room for the
+    /// keyboard in the same animation that slides it in.
+    static func height(keyHeight: CGFloat, bottomPadding: CGFloat) -> CGFloat {
+        let rows = CGFloat(MacKey.rows.count)
+        return topPadding + rows * keyHeight + (rows - 1) * spacing + 8 + bottomPadding
+    }
 
     var body: some View {
-        VStack(spacing: spacing) {
-            ForEach(Array(MacKey.rows.enumerated()), id: \.offset) { _, row in
-                GeometryReader { proxy in
+        GeometryReader { proxy in
+            let available = proxy.size.width - 12
+            VStack(spacing: Self.spacing) {
+                ForEach(Array(MacKey.rows.enumerated()), id: \.offset) { _, row in
                     let units = row.reduce(0) { $0 + $1.width }
-                    let unit = (proxy.size.width - spacing * CGFloat(row.count - 1)) / units
-                    HStack(spacing: spacing) {
+                    let unit = (available - Self.spacing * CGFloat(row.count - 1)) / units
+                    HStack(spacing: Self.spacing) {
                         ForEach(row) { key in
-                            KeyCap(
-                                label: input.label(for: key),
-                                isOn: isOn(key),
-                                isWide: key.width > 1
-                            ) {
+                            KeyCap(label: input.label(for: key), isOn: isOn(key), isWide: key.width > 1) {
                                 input.press(key)
                             }
-                            .frame(width: unit * key.width)
+                            .frame(width: unit * key.width, height: keyHeight)
                         }
                     }
                 }
-                .frame(height: keyHeight)
             }
+            .padding(.horizontal, 6)
+            .padding(.top, Self.topPadding)
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 8)
+        .frame(height: Self.height(keyHeight: keyHeight, bottomPadding: bottomPadding))
         .background(Color(white: 0.11))
     }
 
@@ -68,7 +75,7 @@ private struct KeyCap: View {
     }
 }
 
-/// Darkens the key while pressed, like a real key travel.
+/// Brightens the key while pressed, like a real key travel.
 private struct KeyPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
