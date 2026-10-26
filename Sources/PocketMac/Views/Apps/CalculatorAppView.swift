@@ -28,7 +28,7 @@ struct CalculatorAppView: View {
             ForEach(rows, id: \.self) { row in
                 HStack(spacing: 8) {
                     ForEach(row, id: \.self) { key in
-                        CalculatorKey(label: key, isWide: key == "0") {
+                        CalculatorKey(label: key, isWide: key == "0", isActive: pendingOperator == key && awaitingOperand) {
                             tap(key)
                         }
                     }
@@ -73,6 +73,7 @@ struct CalculatorAppView: View {
             }
             display = formatted(result)
             pendingOperator = nil
+            awaitingOperand = true
         default: break
         }
     }
@@ -88,6 +89,7 @@ struct CalculatorAppView: View {
 private struct CalculatorKey: View {
     let label: String
     var isWide = false
+    var isActive = false
     let action: () -> Void
 
     private var isOperator: Bool { ["÷", "×", "−", "+", "="].contains(label) }
@@ -102,10 +104,10 @@ private struct CalculatorKey: View {
                 .padding(.leading, isWide ? 20 : 0)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(isFunction ? .black : .white)
+        .foregroundStyle(isFunction ? .black : (isActive ? .orange : .white))
         .background(
             Circle()
-                .fill(isOperator ? Color.orange : (isFunction ? Color(white: 0.65) : Color(white: 0.22)))
+                .fill(isActive ? Color.white : (isOperator ? Color.orange : (isFunction ? Color(white: 0.65) : Color(white: 0.22))))
         )
         .clipShape(isWide ? AnyShape(Capsule()) : AnyShape(Circle()))
     }
