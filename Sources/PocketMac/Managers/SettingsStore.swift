@@ -26,6 +26,7 @@ final class SettingsStore: ObservableObject {
     @AppStorage("pocketmac.layoutMode") var layoutModeRaw: String = LayoutMode.direct.rawValue
     @AppStorage("pocketmac.pointerSensitivity") var pointerSensitivity: Double = 1.6
     @AppStorage("pocketmac.reverseScrolling") var reverseScrolling: Bool = false
+    @AppStorage("pocketmac.pointerSize") var pointerSize: Double = 26
 
     var layoutMode: LayoutMode {
         get { LayoutMode(rawValue: layoutModeRaw) ?? .direct }
