@@ -61,6 +61,29 @@ final class AppleRemoteDesktopAuthTests: XCTestCase {
         XCTAssertEqual(credentials.username, "zaki")
         XCTAssertEqual(credentials.password, "correct horse")
     }
+
+    /// Real macOS sends generator 5 with 512-byte (4096-bit) keys. Login
+    /// must still decrypt correctly and stay quick at that size.
+    func testMacOSSizedExchangeIsCorrectAndFast() {
+        let prime = (BigUInt(1) << 4095) + BigUInt(0x1D)
+        let serverSecret = BigUInt(0xFACE_B00C_1234)
+        let serverPublic = BigUInt(5).power(serverSecret, modulus: prime)
+        let challenge = AppleRemoteDesktopAuth.Challenge(
+            generator: 5, keyLength: 512,
+            prime: AppleRemoteDesktopAuth.leftPad(prime.serialize(), to: 512),
+            serverPublicKey: AppleRemoteDesktopAuth.leftPad(serverPublic.serialize(), to: 512)
+        )
+
+        let start = Date()
+        let response = AppleRemoteDesktopAuth.response(to: challenge, username: "afraasheriff", password: "pässwörd ✓")
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertEqual(response.clientPublicKey.count, 512)
+        let credentials = TestDH.decryptCredentials(response, serverSecret: serverSecret, prime: prime, keyLength: 512)
+        XCTAssertEqual(credentials.username, "afraasheriff")
+        XCTAssertEqual(credentials.password, "pässwörd ✓")
+        XCTAssertLessThan(elapsed, 3, "login key exchange took \(elapsed)s")
+    }
 }
 
 enum TestDH {
@@ -70,10 +93,15 @@ enum TestDH {
         radix: 16
     )!
 
-    static func decryptCredentials(_ response: AppleRemoteDesktopAuth.Response, serverSecret: BigUInt) -> (username: String, password: String) {
+    static func decryptCredentials(
+        _ response: AppleRemoteDesktopAuth.Response,
+        serverSecret: BigUInt,
+        prime: BigUInt = TestDH.prime,
+        keyLength: Int = 128
+    ) -> (username: String, password: String) {
         let clientPublic = BigUInt(response.clientPublicKey)
         let shared = clientPublic.power(serverSecret, modulus: prime)
-        let key = Data(Insecure.MD5.hash(data: AppleRemoteDesktopAuth.leftPad(shared.serialize(), to: 128)))
+        let key = Data(Insecure.MD5.hash(data: AppleRemoteDesktopAuth.leftPad(shared.serialize(), to: keyLength)))
         let plain = AppleRemoteDesktopAuth.aes128ECB(response.encryptedCredentials, key: key, operation: CCOperation(kCCDecrypt))
         func string(at offset: Int) -> String {
             let bytes = plain[offset..<(offset + 64)].prefix { $0 != 0 }
