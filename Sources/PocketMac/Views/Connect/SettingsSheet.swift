@@ -20,10 +20,6 @@ struct SettingsSheet: View {
                     .onChange(of: settings.inputModeRaw) { HapticsManager.selectionChanged() }
                 } header: {
                     Text("Control")
-                } footer: {
-                    Text(settings.inputMode == .touch
-                         ? "Touch: no pointer — tap an app or button to click it, swipe to scroll, hold and drag to move things. Like a touchscreen Mac."
-                         : "Trackpad: slide to move the pointer and tap to click, just like a MacBook trackpad.")
                 }
 
                 Section {
