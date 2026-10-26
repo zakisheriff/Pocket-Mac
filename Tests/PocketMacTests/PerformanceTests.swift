@@ -3,11 +3,11 @@ import Metal
 import QuartzCore
 @testable import Pocket_Mac
 
-/// Budgets for a full Retina MacBook screen (3024×1964). The decoder runs
+/// Budgets for a full Retina MacBook screen (3456×2234). The decoder runs
 /// for every frame the Mac sends, so these bound how fast the phone keeps up.
 final class PerformanceTests: XCTestCase {
-    private let width = 3024
-    private let height = 1964
+    private let width = 3456
+    private let height = 2234
 
     private func time(_ body: () throws -> Void) rethrows -> TimeInterval {
         let start = Date()
@@ -37,6 +37,7 @@ final class PerformanceTests: XCTestCase {
         let elapsed = try time {
             try decoder.decode(x: 0, y: 0, width: width, height: height, compressed: frame, into: framebuffer)
         }
+        print("ZRLE desktop \(width)x\(height): \(elapsed * 1000) ms")
         XCTAssertLessThan(elapsed, 0.1, "desktop ZRLE frame took \(elapsed)s")
     }
 
@@ -47,6 +48,7 @@ final class PerformanceTests: XCTestCase {
         let elapsed = try time {
             try ZRLEDecoder().decode(x: 0, y: 0, width: width, height: height, compressed: frame, into: framebuffer)
         }
+        print("ZRLE raw \(width)x\(height): \(elapsed * 1000) ms")
         XCTAssertLessThan(elapsed, 0.4, "all-raw ZRLE frame took \(elapsed)s")
     }
 

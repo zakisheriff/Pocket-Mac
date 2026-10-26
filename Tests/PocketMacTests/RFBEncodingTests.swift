@@ -25,6 +25,16 @@ final class RFBMessagesTests: XCTestCase {
         XCTAssertEqual(RFBPixelFormat(data: encoded), .bgrx)
     }
 
+    func testResponsiveModeAvoidsZlibAndBothModesKeepFallbacks() {
+        XCTAssertEqual(Array(RFBStreamMode.responsive.encodings.prefix(2)), [RFBEncoding.copyRect, RFBEncoding.hextile])
+        XCTAssertEqual(Array(RFBStreamMode.efficient.encodings.prefix(2)), [RFBEncoding.copyRect, RFBEncoding.zrle])
+        for mode in RFBStreamMode.allCases {
+            XCTAssertTrue(mode.encodings.contains(RFBEncoding.compressionLevel1))
+            XCTAssertTrue(mode.encodings.contains(RFBEncoding.raw))
+            XCTAssertTrue(mode.encodings.contains(RFBEncoding.desktopSize))
+        }
+    }
+
     func testUpdateRequestLayout() {
         let data = RFBClientMessage.framebufferUpdateRequest(incremental: true, x: 0, y: 0, width: 1512, height: 982)
         XCTAssertEqual([UInt8](data), [3, 1, 0, 0, 0, 0, 0x05, 0xe8, 0x03, 0xd6])
@@ -142,6 +152,40 @@ final class ZRLEDecoderTests: XCTestCase {
         try decoder.decode(x: 1, y: 0, width: 1, height: 1, compressed: chunkB, into: framebuffer)
         XCTAssertEqual(pixel(framebuffer, 0, 0), 0x123456)
         XCTAssertEqual(pixel(framebuffer, 1, 0), 0x654321)
+    }
+
+    func testRawTilesExpandBGRWithClippedEdgesAndPaddedRows() throws {
+        let framebuffer = RFBFramebuffer(width: 81, height: 70)
+        framebuffer.fill(x: 0, y: 0, width: 81, height: 70, pixel: 0x424242)
+        let width = 70, height = 65
+        func colour(_ x: Int, _ y: Int) -> UInt32 {
+            UInt32(x) << 16 | UInt32(y) << 8 | UInt32((x + y) & 255)
+        }
+        var tiles: [UInt8] = []
+        for tileY in stride(from: 0, to: height, by: 64) {
+            for tileX in stride(from: 0, to: width, by: 64) {
+                tiles.append(0)
+                for y in tileY..<min(tileY + 64, height) {
+                    for x in tileX..<min(tileX + 64, width) { tiles += cpixel(colour(x, y)) }
+                }
+            }
+        }
+        try ZRLEDecoder().decode(x: 3, y: 2, width: width, height: height,
+                                 compressed: zlibCompress(tiles), into: framebuffer)
+        framebuffer.withPixelWords { pixels, stride in
+            for y in 0..<70 {
+                for x in 0..<81 {
+                    let expected = (3..<73).contains(x) && (2..<67).contains(y) ? colour(x - 3, y - 2) : 0x424242
+                    XCTAssertEqual(pixels[y * stride + x], expected | RFBFramebuffer.opaque, "at \(x),\(y)")
+                }
+            }
+        }
+    }
+
+    func testTruncatedRawTileIsRejectedBeforePixelConversion() {
+        let framebuffer = RFBFramebuffer(width: 2, height: 1)
+        XCTAssertThrowsError(try ZRLEDecoder().decode(x: 0, y: 0, width: 2, height: 1,
+            compressed: zlibCompress([0, 1, 2, 3]), into: framebuffer))
     }
 
     func testCorruptSubencodingThrows() {

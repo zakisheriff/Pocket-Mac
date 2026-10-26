@@ -68,6 +68,26 @@ enum RFBEncoding {
     static let zrle: Int32 = 16
     static let cursor: Int32 = -239
     static let desktopSize: Int32 = -223
+    /// A standard server hint: spend less CPU compressing interactive updates.
+    static let compressionLevel1: Int32 = -255
+}
+
+/// Both modes are lossless. Responsive avoids zlib work on the Mac;
+/// Efficient trades more CPU work for less Wi-Fi traffic.
+enum RFBStreamMode: String, CaseIterable, Identifiable {
+    case responsive, efficient
+
+    var id: String { rawValue }
+    var displayName: String { self == .responsive ? "Responsive" : "Efficient" }
+
+    var encodings: [Int32] {
+        let pixels = self == .responsive
+            ? [RFBEncoding.hextile, RFBEncoding.zrle, RFBEncoding.zlib]
+            : [RFBEncoding.zrle, RFBEncoding.zlib, RFBEncoding.hextile]
+        return [RFBEncoding.copyRect] + pixels + [
+            RFBEncoding.raw, RFBEncoding.cursor, RFBEncoding.desktopSize, RFBEncoding.compressionLevel1,
+        ]
+    }
 }
 
 /// Mouse buttons as RFB button-mask bits. Scroll wheels are buttons 4–7,

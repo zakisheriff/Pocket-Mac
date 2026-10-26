@@ -63,6 +63,13 @@ final class SettingsStore: ObservableObject {
     @AppStorage("pocketmac.pointerStyle") var pointerStyleRaw: String = PointerStyle.macArrow.rawValue
     @AppStorage("pocketmac.inputMode") var inputModeRaw: String = InputMode.trackpad.rawValue
 
+    @AppStorage("pocketmac.streamMode") var streamModeRaw: String = RFBStreamMode.responsive.rawValue
+
+    var streamMode: RFBStreamMode {
+        get { RFBStreamMode(rawValue: streamModeRaw) ?? .responsive }
+        set { streamModeRaw = newValue.rawValue }
+    }
+
     var inputMode: InputMode {
         get { InputMode(rawValue: inputModeRaw) ?? .trackpad }
         set { inputModeRaw = newValue.rawValue }

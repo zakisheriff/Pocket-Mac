@@ -214,6 +214,34 @@ network via Bonjour-advertised Screen Sharing, never a remote relay
 
 ---
 
+## Streaming performance
+
+Settings → Streaming applies immediately during a connection:
+
+- **Responsive** (default) prefers Hextile to reduce compression work on the Mac.
+  It uses more Wi-Fi bandwidth and benefits from a fast local network.
+- **Efficient** prefers ZRLE to reduce network traffic. It can perform better
+  when bandwidth is limited. Both modes preserve full colour and resolution.
+
+Remote update rate depends on the Mac's screen capture and encoding, network
+transfer, and phone decoding. A 120 Hz phone display or local pointer does not
+make the Mac send 120 screen updates per second. The standard VNC path does not
+promise sustained 60 or 120 fps, especially at full Retina resolution.
+
+The Xcode console reports **updates/s**, throughput, encoding, average
+**read**, **decode** (plus maximum), and **wait** times. Read includes socket
+transfer and message parsing; decode measures raw/ZRLE/zlib/CopyRect processing
+(Hextile parses directly while reading). Wait runs from an update request to
+the next update header, including time when the Mac's screen has not changed;
+it is not a pure network round-trip or host-CPU measurement.
+
+The client requests the next update as soon as the previous update's final
+payload is received, before decompressing it. Pointer movement is coalesced at
+60 Hz to avoid replaying stale drag positions, while button and keyboard events
+retain their order and the local pointer follows the phone's display rate.
+
+---
+
 ## 🧪 Testing
 
 ```bash

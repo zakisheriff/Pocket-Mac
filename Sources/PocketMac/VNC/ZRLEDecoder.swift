@@ -1,3 +1,4 @@
+import Accelerate
 import Foundation
 import zlib
 
@@ -48,9 +49,16 @@ final class ZRLEDecoder {
 
         switch subencoding {
         case 0:
-            for row in 0..<height {
-                let line = origin + row * stride
-                for column in 0..<width { line[column] = try reader.cpixel() }
+            let source = try reader.take(total * 3)
+            var input = vImage_Buffer(data: UnsafeMutableRawPointer(mutating: source),
+                                      height: vImagePixelCount(height), width: vImagePixelCount(width), rowBytes: width * 3)
+            var output = vImage_Buffer(data: origin, height: vImagePixelCount(height),
+                                       width: vImagePixelCount(width), rowBytes: stride * 4)
+            // BGR → BGRA is the same byte expansion as RGB → RGBA. vImage
+            // vectorises it; no throwing bounds check for each of 8M pixels.
+            let status = vImageConvert_RGB888toRGBA8888(&input, nil, 255, &output, false, vImage_Flags(kvImageDoNotTile))
+            guard status == kvImageNoError else {
+                throw RFBError.protocolViolation("ZRLE pixel conversion failed (\(status))")
             }
 
         case 1:
@@ -143,6 +151,13 @@ private struct TileReader {
         guard offset < count else { throw RFBError.protocolViolation("ZRLE data ended early") }
         defer { offset += 1 }
         return base[offset]
+    }
+
+    @inline(__always)
+    mutating func take(_ length: Int) throws -> UnsafePointer<UInt8> {
+        guard length <= count - offset else { throw RFBError.protocolViolation("ZRLE data ended early") }
+        defer { offset += length }
+        return base + offset
     }
 
     /// 3-byte B,G,R → opaque BGRA word.

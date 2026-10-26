@@ -15,7 +15,13 @@ struct ContentView: View {
             .onChange(of: client.state) { _, state in
                 if case .failed = state { HapticsManager.error() }
             }
-            .onAppear { HapticsManager.prepare() }
+            .onAppear {
+                HapticsManager.prepare()
+                client.setStreamMode(settings.streamMode)
+            }
+            .onChange(of: settings.streamModeRaw) { _, _ in
+                client.setStreamMode(settings.streamMode)
+            }
             .onChange(of: scenePhase) { _, phase in
                 switch phase {
                 case .background: client.enterBackground()

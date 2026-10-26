@@ -147,7 +147,7 @@ final class RFBClientIntegrationTests: XCTestCase {
     }
 
     func testHextileAndZlibScreensDecodeExactly() async throws {
-        for encoding in [RFBEncoding.hextile, RFBEncoding.zlib] {
+        for encoding in [RFBEncoding.hextile, RFBEncoding.zlib, RFBEncoding.zrle] {
             let server = try FakeRFBServer(login: .vncPassword("pw123456"), width: 3, height: 2, pixels: screenPixels)
             server.screenEncoding = encoding
             server.start()
@@ -262,6 +262,86 @@ final class RFBClientIntegrationTests: XCTestCase {
         }
         guard case .failed(let message) = client.state else { return XCTFail("expected malformed data to fail") }
         XCTAssertTrue(message.contains("hextile subrect outside its tile"), message)
+    }
+
+    func testNextRequestWaitsForTheEntireFinalCompressedPayload() async throws {
+        let server = try FakeRFBServer(login: .vncPassword("pw123456"), width: 3, height: 2, pixels: screenPixels)
+        let chunks = zlibCompressInTwoFlushes([0, 0, 0, 255, 0, 255, 0, 255, 0, 0],
+                                            [0, 255, 255, 255, 0, 0, 0, 128, 128, 128])
+        var update = Data([0, 0, 0, 2])
+        for (y, compressed) in [chunks.0, chunks.1].enumerated() {
+            for value in [0, y, 3, 1] { update.appendBE(UInt16(value)) }
+            update.appendBE(RFBEncoding.zrle)
+            update.appendBE(UInt32(compressed.count))
+            update.append(compressed)
+        }
+        server.screenUpdateOverride = update
+        server.screenChunkSize = update.count - 2 // hold the last two payload bytes
+        server.screenChunkDelay = 350_000
+        server.probeNextRequestDuringFirstScreen = true
+        server.start()
+        let client = RFBClient()
+        defer { client.disconnect() }
+        client.setStreamMode(.efficient)
+        client.connect(request(port: server.port, username: "", password: "pw123456"))
+        try await waitUntil { client.hasScreen && server.nextRequestAt != nil }
+        let sentAt = try XCTUnwrap(server.screenStartedAt)
+        let requestedAt = try XCTUnwrap(server.nextRequestAt)
+        XCTAssertGreaterThan(requestedAt.timeIntervalSince(sentAt), 0.33,
+                             "a request sent before the final payload can be dropped by macOS")
+        let screen = try XCTUnwrap(client.snapshot())
+        for (index, expected) in screenPixels.enumerated() {
+            XCTAssertEqual(rgb(screen, x: index % 3, y: index / 3), expected)
+        }
+    }
+
+    func testStreamModeCanChangeWithoutReconnecting() async throws {
+        let server = try FakeRFBServer(login: .vncPassword("pw123456"), width: 3, height: 2, pixels: screenPixels)
+        server.answersEveryRequest = true
+        server.start()
+        let client = RFBClient()
+        defer { client.disconnect() }
+        client.connect(request(port: server.port, username: "", password: "pw123456"))
+        try await waitUntil { client.hasScreen }
+        XCTAssertEqual(server.requestedEncodings, RFBStreamMode.responsive.encodings)
+        client.setStreamMode(.efficient)
+        try await waitUntil { server.requestedEncodings == RFBStreamMode.efficient.encodings }
+        let frames = server.framesSent
+        try await waitUntil { server.framesSent > frames }
+        XCTAssertEqual(server.connections, 1)
+        XCTAssertEqual(client.state, .connected)
+    }
+
+    func testInputPacerCoalescesMotionWithoutDroppingButtonsOrKeys() async throws {
+        var sent: [Data] = []
+        let pacer = RFBInputPacer { sent.append($0) }
+        for x in 0..<1000 {
+            pacer.enqueue(RFBClientMessage.pointerEvent(buttons: [], x: UInt16(x), y: 0), motion: true)
+        }
+        XCTAssertTrue(sent.isEmpty)
+        let press = RFBClientMessage.pointerEvent(buttons: .left, x: 999, y: 0)
+        pacer.enqueue(press)
+        for x in 1000..<2000 {
+            pacer.enqueue(RFBClientMessage.pointerEvent(buttons: .left, x: UInt16(x), y: 0), motion: true)
+        }
+        let release = RFBClientMessage.pointerEvent(buttons: [], x: 1999, y: 0)
+        pacer.enqueue(release)
+        let keyDown = RFBClientMessage.keyEvent(keysym: 0x61, down: true)
+        let keyUp = RFBClientMessage.keyEvent(keysym: 0x61, down: false)
+        pacer.enqueue(keyDown)
+        pacer.enqueue(keyUp)
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertEqual(sent, [
+            RFBClientMessage.pointerEvent(buttons: [], x: 999, y: 0), press,
+            RFBClientMessage.pointerEvent(buttons: .left, x: 1999, y: 0), release, keyDown, keyUp,
+        ])
+        pacer.enqueue(RFBClientMessage.pointerEvent(buttons: [], x: 2000, y: 0), motion: true)
+        try await waitUntil { sent.count == 7 }
+        XCTAssertEqual(sent.last, RFBClientMessage.pointerEvent(buttons: [], x: 2000, y: 0))
+        pacer.enqueue(RFBClientMessage.pointerEvent(buttons: [], x: 3000, y: 0), motion: true)
+        pacer.cancel()
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertEqual(sent.count, 7, "disconnect must discard unsent movement")
     }
 
     func testVNCPasswordLoginIsUsedWhenNoUsernameIsGiven() async throws {

@@ -91,6 +91,16 @@ final class RFBClient: ObservableObject {
     private var stream: RFBStream?
     private var sessionTask: Task<Void, Never>?
     private var framebuffer: RFBFramebuffer?
+    private var streamMode: RFBStreamMode = .responsive
+    private lazy var inputPacer = RFBInputPacer { [weak self] data in self?.stream?.enqueue(data) }
+
+    func setStreamMode(_ mode: RFBStreamMode) {
+        guard mode != streamMode else { return }
+        streamMode = mode
+        if state == .connected {
+            stream?.enqueue(RFBClientMessage.setEncodings(mode.encodings))
+        }
+    }
 
     var isActive: Bool {
         state == .connecting || state == .authenticating || state == .connected
@@ -128,8 +138,9 @@ final class RFBClient: ObservableObject {
             sink.cursorChanged(nil)
         }
 
+        let mode = streamMode
         sessionTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let session = RFBSession(stream: stream, request: request, client: self)
+            let session = RFBSession(stream: stream, request: request, mode: mode, client: self)
             do {
                 try await session.run()
             } catch is CancellationError {
@@ -183,6 +194,7 @@ final class RFBClient: ObservableObject {
         sessionTask = nil
         stream?.close()
         stream = nil
+        inputPacer.cancel()
         buttons = []
         state = newState
     }
@@ -202,7 +214,7 @@ final class RFBClient: ObservableObject {
         )
         pointer = clamped
         for sink in sinks { sink.pointerMoved(to: clamped) }
-        sendPointer()
+        sendPointer(motion: true)
     }
 
     func movePointer(by delta: CGVector) {
@@ -243,7 +255,7 @@ final class RFBClient: ObservableObject {
     }
 
     func sendKey(_ keysym: UInt32, down: Bool) {
-        stream?.enqueue(RFBClientMessage.keyEvent(keysym: keysym, down: down))
+        inputPacer.enqueue(RFBClientMessage.keyEvent(keysym: keysym, down: down))
     }
 
     func tapKey(_ keysym: UInt32, modifiers: Set<ModifierKey> = []) {
@@ -261,16 +273,16 @@ final class RFBClient: ObservableObject {
     }
 
     func sendClipboard(_ text: String) {
-        stream?.enqueue(RFBClientMessage.clientCutText(text))
+        inputPacer.enqueue(RFBClientMessage.clientCutText(text))
     }
 
     private func tap(wheel: RFBButtons) {
-        stream?.enqueue(RFBClientMessage.pointerEvent(buttons: buttons.union(wheel), x: UInt16(pointer.x), y: UInt16(pointer.y)))
-        stream?.enqueue(RFBClientMessage.pointerEvent(buttons: buttons, x: UInt16(pointer.x), y: UInt16(pointer.y)))
+        inputPacer.enqueue(RFBClientMessage.pointerEvent(buttons: buttons.union(wheel), x: UInt16(pointer.x), y: UInt16(pointer.y)))
+        inputPacer.enqueue(RFBClientMessage.pointerEvent(buttons: buttons, x: UInt16(pointer.x), y: UInt16(pointer.y)))
     }
 
-    private func sendPointer() {
-        stream?.enqueue(RFBClientMessage.pointerEvent(buttons: buttons, x: UInt16(pointer.x), y: UInt16(pointer.y)))
+    private func sendPointer(motion: Bool = false) {
+        inputPacer.enqueue(RFBClientMessage.pointerEvent(buttons: buttons, x: UInt16(pointer.x), y: UInt16(pointer.y)), motion: motion)
     }
 
     // MARK: - Session callbacks
@@ -280,9 +292,10 @@ final class RFBClient: ObservableObject {
         state = newState
     }
 
-    fileprivate func sessionStarted(stream: RFBStream, name: String, framebuffer: RFBFramebuffer) {
+    fileprivate func sessionStarted(stream: RFBStream, name: String, framebuffer: RFBFramebuffer, mode: RFBStreamMode) {
         guard stream === self.stream else { return }
         desktopName = name
+        if mode != streamMode { stream.enqueue(RFBClientMessage.setEncodings(streamMode.encodings)) }
         self.framebuffer = framebuffer
         shownSurface = framebuffer.surface
         screenSize = CGSize(width: framebuffer.width, height: framebuffer.height)
@@ -344,6 +357,48 @@ final class RFBClient: ObservableObject {
     }
 }
 
+/// VNC servers replay pointer events in order. Sending every touch sample
+/// can leave the Mac replaying old drag positions while it is encoding. Keep
+/// only the latest unsent motion at 60 Hz; clicks, keys and wheels are ordered
+/// barriers and are never delayed or dropped. The local pointer stays at the
+/// phone's full display rate.
+@MainActor
+final class RFBInputPacer {
+    private let send: (Data) -> Void
+    private var pendingMotion: Data?
+    private var scheduled: DispatchWorkItem?
+
+    init(send: @escaping (Data) -> Void) { self.send = send }
+
+    func enqueue(_ data: Data, motion: Bool = false) {
+        guard motion else {
+            flush()
+            send(data)
+            return
+        }
+        pendingMotion = data
+        guard scheduled == nil else { return }
+        let work = DispatchWorkItem { [weak self] in self?.flush() }
+        scheduled = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60.0, execute: work)
+    }
+
+    private func flush() {
+        scheduled?.cancel()
+        scheduled = nil
+        if let pendingMotion {
+            self.pendingMotion = nil
+            send(pendingMotion)
+        }
+    }
+
+    func cancel() {
+        scheduled?.cancel()
+        scheduled = nil
+        pendingMotion = nil
+    }
+}
+
 /// Watches the screen stream from a side task: nudges the Mac with a fresh
 /// update request whenever updates stop arriving (so the picture can never
 /// freeze), and prints frames per second, data rate and screen formats to
@@ -362,7 +417,19 @@ private final class SessionMonitor: @unchecked Sendable {
     private let startedAt = Date()
     private var hasPixels = false
     private var lastFullRequest = Date()
-    private(set) var stalled = false
+    private var isReceiving = false
+    private var lastRequest = Date()
+    private var waitTime: TimeInterval = 0
+    private var readTime: TimeInterval = 0
+    private var decodeTime: TimeInterval = 0
+    private var maxDecodeTime: TimeInterval = 0
+    private var currentWait: TimeInterval = 0
+    private var _stalled = false
+    var stalled: Bool { lock.withLock { _stalled } }
+
+    func requestSent() {
+        lock.withLock { lastRequest = Date() }
+    }
 
     func pixelsArrived() {
         lock.withLock { hasPixels = true }
@@ -376,10 +443,13 @@ private final class SessionMonitor: @unchecked Sendable {
     /// the session can be reopened.
     func nextNudge(quiet: TimeInterval) -> Nudge {
         let waiting: Nudge? = lock.withLock {
-            guard !hasPixels else { return nil }
             let now = Date()
+            // A slow update is not a lost request. Repeated full captures
+            // during receive/decode only put more work on the Mac.
+            if isReceiving && now.timeIntervalSince(lastUpdate) < 2 { return Nudge.none }
+            guard !hasPixels else { return nil }
             if now.timeIntervalSince(startedAt) > 8 {
-                stalled = true
+                _stalled = true
                 return .giveUp
             }
             guard now.timeIntervalSince(lastFullRequest) >= 1 else { return Nudge.none }
@@ -398,7 +468,12 @@ private final class SessionMonitor: @unchecked Sendable {
     var screenSize: (width: Int, height: Int) { lock.withLock { screen } }
 
     func updateArrived() {
-        lock.withLock { lastUpdate = Date() }
+        lock.withLock {
+            let now = Date()
+            currentWait = now.timeIntervalSince(lastRequest)
+            lastUpdate = now
+            isReceiving = true
+        }
     }
 
     func record(encoding: Int32, bytes count: Int) {
@@ -408,9 +483,16 @@ private final class SessionMonitor: @unchecked Sendable {
         }
     }
 
-    func frameDone() {
+    func frameDone(elapsed: TimeInterval, decode: TimeInterval, changedScreen: Bool) {
         lock.withLock {
-            frames += 1
+            if changedScreen {
+                frames += 1
+                waitTime += currentWait
+                readTime += max(0, elapsed - decode)
+                decodeTime += decode
+                maxDecodeTime = max(maxDecodeTime, decode)
+            }
+            isReceiving = false
             lastUpdate = Date()
         }
     }
@@ -436,10 +518,16 @@ private final class SessionMonitor: @unchecked Sendable {
                 "\(Self.name(encoding)) \(bytes > 0 ? count * 100 / bytes : 0)%"
             }.joined(separator: ", ")
             let text = String(
-                format: "Pocket Mac: %.1f fps · %.2f MB/s · screen %dx%d · %@ · re-asked %d×",
-                fps, rate, screen.width, screen.height, mix.isEmpty ? "no updates" : mix, nudges
+                format: "Pocket Mac: %.1f updates/s · %.2f MB/s · screen %dx%d · %@ · read %.1f ms · decode %.1f ms (max %.1f) · wait %.1f ms · re-asked %d×",
+                fps, rate, screen.width, screen.height, mix.isEmpty ? "no updates" : mix,
+                readTime * 1000 / Double(max(frames, 1)), decodeTime * 1000 / Double(max(frames, 1)),
+                maxDecodeTime * 1000, waitTime * 1000 / Double(max(frames, 1)), nudges
             )
             frames = 0
+            readTime = 0
+            decodeTime = 0
+            maxDecodeTime = 0
+            waitTime = 0
             bytes = 0
             nudges = 0
             bytesByEncoding = [:]
@@ -487,6 +575,7 @@ private final class FrameGate: @unchecked Sendable {
 private final class RFBSession {
     private let stream: RFBStream
     private let request: MacConnectionRequest
+    private let mode: RFBStreamMode
     private weak var client: RFBClient?
     private var framebuffer = RFBFramebuffer(width: 0, height: 0)
     private let zrle = ZRLEDecoder()
@@ -494,9 +583,10 @@ private final class RFBSession {
     private let frameGate = FrameGate()
     private let monitor = SessionMonitor()
 
-    init(stream: RFBStream, request: MacConnectionRequest, client: RFBClient?) {
+    init(stream: RFBStream, request: MacConnectionRequest, mode: RFBStreamMode, client: RFBClient?) {
         self.stream = stream
         self.request = request
+        self.mode = mode
         self.client = client
     }
 
@@ -533,23 +623,18 @@ private final class RFBSession {
         let framebuffer = RFBFramebuffer(width: width, height: height)
         self.framebuffer = framebuffer
         stream.enqueue(RFBClientMessage.setPixelFormat(.bgrx))
-        // Prefer moving pixels already on the phone for window drags and
-        // scrolling, then compressed encodings for newly exposed content.
-        stream.enqueue(RFBClientMessage.setEncodings([
-            RFBEncoding.copyRect, RFBEncoding.zrle, RFBEncoding.zlib,
-            RFBEncoding.hextile, RFBEncoding.raw,
-            RFBEncoding.cursor, RFBEncoding.desktopSize,
-        ]))
+        stream.enqueue(RFBClientMessage.setEncodings(mode.encodings))
         monitor.setScreen(width: width, height: height)
         requestUpdate(incremental: false)
         let displayName = name.isEmpty ? request.displayName : name
-        onMain { $0.sessionStarted(stream: stream, name: displayName, framebuffer: framebuffer) }
+        onMain { $0.sessionStarted(stream: stream, name: displayName, framebuffer: framebuffer, mode: self.mode) }
 
         let watchdog = Task.detached(priority: .userInitiated) { [monitor] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(250))
                 let size = monitor.screenSize
                 func request(incremental: Bool) {
+                    monitor.requestSent()
                     stream.enqueue(RFBClientMessage.framebufferUpdateRequest(
                         incremental: incremental, x: 0, y: 0, width: UInt16(size.width), height: UInt16(size.height)
                     ))
@@ -681,8 +766,20 @@ private final class RFBSession {
         let stream = self.stream
         monitor.updateArrived()
         var changedScreen = false
+        var nextRequested = false
+        let frameStarted = Date()
+        var decodeTime: TimeInterval = 0
 
-        for _ in 0..<rectangles {
+        func receivedLastPayload(_ index: Int) {
+            guard index == rectangles - 1 else { return }
+            // All bytes of this update have arrived, so a new request cannot
+            // interrupt a server mid-send. Overlap its next capture/encode
+            // with this frame's decompression instead of serialising both.
+            requestUpdate(incremental: true)
+            nextRequested = true
+        }
+
+        for index in 0..<rectangles {
             // One read for the whole 12-byte header instead of five.
             let header = try await stream.read(12)
             let x = Int(header.bigEndianU16(at: 0))
@@ -696,19 +793,31 @@ private final class RFBSession {
             switch encoding {
             case RFBEncoding.raw:
                 let pixels = try await stream.read(width * height * 4)
+                receivedLastPayload(index)
+                let start = Date()
                 try framebuffer.blitRaw(x: x, y: y, width: width, height: height, data: pixels)
+                decodeTime += Date().timeIntervalSince(start)
             case RFBEncoding.copyRect:
                 let sourceX = Int(try await stream.readU16())
                 let sourceY = Int(try await stream.readU16())
+                receivedLastPayload(index)
+                let start = Date()
                 try framebuffer.copyRect(fromX: sourceX, fromY: sourceY, toX: x, toY: y, width: width, height: height)
+                decodeTime += Date().timeIntervalSince(start)
             case RFBEncoding.zrle:
                 let length = Int(try await stream.readU32())
                 let compressed = try await stream.read(length)
+                receivedLastPayload(index)
+                let start = Date()
                 try zrle.decode(x: x, y: y, width: width, height: height, compressed: compressed, into: framebuffer)
+                decodeTime += Date().timeIntervalSince(start)
             case RFBEncoding.zlib:
                 let length = Int(try await stream.readU32())
                 let compressed = try await stream.read(length)
+                receivedLastPayload(index)
+                let start = Date()
                 try zlibRects.decode(x: x, y: y, width: width, height: height, compressed: compressed, into: framebuffer)
+                decodeTime += Date().timeIntervalSince(start)
             case RFBEncoding.hextile:
                 try await HextileDecoder.decode(x: x, y: y, width: width, height: height, from: stream, into: framebuffer)
             case RFBEncoding.cursor:
@@ -726,10 +835,8 @@ private final class RFBSession {
             monitor.record(encoding: encoding, bytes: await stream.totalBytesRead - bytesBefore)
         }
 
-        monitor.frameDone()
-        // Ask for the next frame once this one is fully in, as macOS expects
-        // (a request sent mid-update can be dropped, freezing the picture).
-        requestUpdate(incremental: true)
+        monitor.frameDone(elapsed: Date().timeIntervalSince(frameStarted), decode: decodeTime, changedScreen: changedScreen)
+        if !nextRequested { requestUpdate(incremental: true) }
         // A pointer-shape-only update isn't the screen: keep waiting for it.
         guard changedScreen else { return }
         monitor.pixelsArrived()
@@ -750,6 +857,7 @@ private final class RFBSession {
     }
 
     private func requestUpdate(incremental: Bool) {
+        monitor.requestSent()
         stream.enqueue(RFBClientMessage.framebufferUpdateRequest(
             incremental: incremental, x: 0, y: 0,
             width: UInt16(framebuffer.width), height: UInt16(framebuffer.height)

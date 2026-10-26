@@ -81,6 +81,23 @@ struct SettingsSheet: View {
                 }
                 }
 
+                Section {
+                    Picker("Streaming", selection: Binding(
+                        get: { settings.streamMode },
+                        set: { settings.streamMode = $0 }
+                    )) {
+                        ForEach(RFBStreamMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: settings.streamModeRaw) { HapticsManager.selectionChanged() }
+                } header: {
+                    Text("Streaming")
+                } footer: {
+                    Text("Responsive reduces compression work on your Mac and uses more Wi-Fi bandwidth. Choose Efficient on a slower network. Changes apply immediately; frame rate depends on your Mac and connection.")
+                }
+
                 Section("Scrolling") {
                     Toggle("Reverse Scrolling", isOn: $settings.reverseScrolling)
                         .onChange(of: settings.reverseScrolling) { HapticsManager.selectionChanged() }

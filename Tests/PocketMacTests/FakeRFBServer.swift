@@ -32,6 +32,10 @@ final class FakeRFBServer {
     var screenUpdateOverride: Data?
     var screenChunkSize = Int.max
     var screenChunkDelay: useconds_t = 0
+    /// Consume the next request concurrently with a deliberately slow send.
+    var probeNextRequestDuringFirstScreen = false
+    private var _nextRequestAt: Date?
+    var nextRequestAt: Date? { lock.withLock { _nextRequestAt } }
     /// Silently ignore this many update requests, like macOS does when one
     /// arrives while it's busy sending.
     var requestsToDrop = 0
@@ -199,12 +203,26 @@ final class FakeRFBServer {
                 if !sentScreen || answersEveryRequest {
                     sentScreen = true
                     let update = screenUpdateOverride ?? rawScreenUpdate()
+                    let probeDone = DispatchSemaphore(value: 0)
+                    let probe = probeNextRequestDuringFirstScreen && framesSent == 0
+                    if probe {
+                        Thread { [self] in
+                            defer { probeDone.signal() }
+                            if let next = read(fd, 10), next.first == 3 {
+                                lock.withLock {
+                                    _nextRequestAt = Date()
+                                    _updateRequests += 1
+                                }
+                            }
+                        }.start()
+                    }
                     lock.withLock { if _screenStartedAt == nil { _screenStartedAt = Date() } }
                     for offset in stride(from: 0, to: update.count, by: screenChunkSize) {
                         send(fd, update.subdata(in: offset..<min(offset + screenChunkSize, update.count)))
                         if screenChunkDelay > 0 { usleep(screenChunkDelay) }
                     }
                     lock.withLock { _framesSent += 1 }
+                    if probe { probeDone.wait() }
                 }
             case 4:
                 guard let body = read(fd, 7) else { return }
@@ -252,6 +270,21 @@ final class FakeRFBServer {
                 data.append(UInt8((index % width) << 4 | (index / width)))
                 data.append(0)
             }
+        case RFBEncoding.zrle:
+            var tiles: [UInt8] = []
+            for tileY in stride(from: 0, to: height, by: 64) {
+                for tileX in stride(from: 0, to: width, by: 64) {
+                    tiles.append(0)
+                    for y in tileY..<min(tileY + 64, height) {
+                        for x in tileX..<min(tileX + 64, width) {
+                            tiles.append(contentsOf: bytes(pixels[y * width + x]).prefix(3))
+                        }
+                    }
+                }
+            }
+            let compressed = zlibCompress(tiles)
+            data.appendBE(UInt32(compressed.count))
+            data.append(compressed)
         case RFBEncoding.zlib:
             let compressed = zlibCompress([UInt8](raw))
             data.appendBE(UInt32(compressed.count))
