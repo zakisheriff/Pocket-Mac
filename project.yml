@@ -41,6 +41,7 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         UIRequiresFullScreen: true
+        CADisableMinimumFrameDurationOnPhone: true
         ITSAppUsesNonExemptEncryption: false
         NSLocalNetworkUsageDescription: Pocket Mac looks for Macs with Screen Sharing turned on so you can control them from your iPhone.
         NSBonjourServices:
