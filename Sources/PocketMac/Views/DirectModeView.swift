@@ -42,13 +42,19 @@ struct DirectModeView: View {
         }
     }
 
+    @State private var sheetDragOffset: CGFloat = 0
+
     private var keyboardSheet: some View {
         VStack(spacing: 0) {
+            Capsule()
+                .fill(.white.opacity(0.3))
+                .frame(width: 36, height: 4)
+                .padding(.top, 6)
+
             HStack {
                 Spacer()
                 Button {
-                    keyboard.target = .none
-                    HapticsManager.tap()
+                    dismissKeyboard()
                 } label: {
                     Text("Done")
                         .font(.system(size: 13, weight: .semibold))
@@ -59,11 +65,29 @@ struct DirectModeView: View {
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.top, 6)
+            .padding(.top, 4)
 
             KeyboardView(keyboard: keyboard, compact: true)
         }
         .background(Color(white: 0.09))
+        .offset(y: sheetDragOffset)
+        .gesture(
+            DragGesture()
+                .onChanged { value in
+                    sheetDragOffset = max(0, value.translation.height)
+                }
+                .onEnded { value in
+                    if value.translation.height > 60 {
+                        dismissKeyboard()
+                    }
+                    sheetDragOffset = 0
+                }
+        )
+    }
+
+    private func dismissKeyboard() {
+        keyboard.target = .none
+        HapticsManager.tap()
     }
 }
 
