@@ -8,23 +8,16 @@ import zlib
 /// Assumes the session's pixel format is `RFBPixelFormat.bgrx`, so every
 /// compressed pixel ("CPIXEL") is 3 bytes: blue, green, red.
 final class ZRLEDecoder {
-    private var stream = z_stream()
-    private var isInitialized = false
-    /// Reused between rectangles so a busy screen doesn't allocate per frame.
-    private var inflated = [UInt8]()
-
-    deinit {
-        if isInitialized { inflateEnd(&stream) }
-    }
+    private let zlib = ZlibStream()
 
     @_optimize(speed)
     func decode(x: Int, y: Int, width: Int, height: Int, compressed: Data, into framebuffer: RFBFramebuffer) throws {
         guard framebuffer.contains(x: x, y: y, width: width, height: height) else {
             throw RFBError.protocolViolation("ZRLE rect is outside the screen")
         }
-        let length = try inflate(compressed)
+        let length = try zlib.inflate(compressed)
 
-        try inflated.withUnsafeBufferPointer { buffer in
+        try zlib.withOutput { buffer in
             var reader = TileReader(base: buffer.baseAddress!, count: length)
             try framebuffer.withPixelWords { pixels, stride in
                 var tileY = 0
@@ -136,45 +129,6 @@ final class ZRLEDecoder {
             row += 1
             column = 0
         }
-    }
-
-    /// Inflates into the reusable buffer and returns the number of bytes produced.
-    @_optimize(speed)
-    private func inflate(_ input: Data) throws -> Int {
-        if !isInitialized {
-            let status = inflateInit_(&stream, zlibVersion(), Int32(MemoryLayout<z_stream>.size))
-            guard status == Z_OK else { throw RFBError.protocolViolation("zlib init failed (\(status))") }
-            isInitialized = true
-        }
-        if inflated.count < max(input.count * 4, 64 * 1024) {
-            inflated = [UInt8](repeating: 0, count: max(input.count * 4, 64 * 1024))
-        }
-
-        var produced = 0
-        try input.withUnsafeBytes { (source: UnsafeRawBufferPointer) in
-            stream.next_in = UnsafeMutablePointer(mutating: source.bindMemory(to: Bytef.self).baseAddress)
-            stream.avail_in = uInt(input.count)
-            while true {
-                if produced == inflated.count {
-                    inflated.append(contentsOf: [UInt8](repeating: 0, count: inflated.count))
-                }
-                let space = inflated.count - produced
-                let status: Int32 = inflated.withUnsafeMutableBufferPointer { destination in
-                    stream.next_out = destination.baseAddress! + produced
-                    stream.avail_out = uInt(space)
-                    return zlib.inflate(&stream, Z_SYNC_FLUSH)
-                }
-                guard status == Z_OK || status == Z_STREAM_END || status == Z_BUF_ERROR else {
-                    throw RFBError.protocolViolation("zlib inflate failed (\(status))")
-                }
-                let wrote = space - Int(stream.avail_out)
-                produced += wrote
-                if stream.avail_in == 0 && stream.avail_out > 0 { break }
-                if wrote == 0 && status == Z_BUF_ERROR { break }
-            }
-            stream.next_in = nil
-        }
-        return produced
     }
 }
 
