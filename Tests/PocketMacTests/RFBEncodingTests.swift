@@ -58,7 +58,7 @@ final class KeysymTests: XCTestCase {
 final class RFBFramebufferTests: XCTestCase {
 
     private func pixel(_ framebuffer: RFBFramebuffer, _ x: Int, _ y: Int) -> UInt32 {
-        framebuffer.withPixelWords { words, stride in UInt32(littleEndian: words[y * stride + x]) }
+        framebuffer.withPixelWords { words, stride in words[y * stride + x] & 0x00FF_FFFF }
     }
 
     func testRawBlitPlacesPixels() throws {
@@ -95,7 +95,7 @@ final class RFBFramebufferTests: XCTestCase {
 final class ZRLEDecoderTests: XCTestCase {
 
     private func pixel(_ framebuffer: RFBFramebuffer, _ x: Int, _ y: Int) -> UInt32 {
-        framebuffer.withPixelWords { words, stride in UInt32(littleEndian: words[y * stride + x]) }
+        framebuffer.withPixelWords { words, stride in words[y * stride + x] & 0x00FF_FFFF }
     }
 
     private func cpixel(_ rgb: UInt32) -> [UInt8] {
@@ -163,7 +163,8 @@ func zlibCompressInTwoFlushes(_ first: [UInt8], _ second: [UInt8]) -> (Data, Dat
 
     func flush(_ input: [UInt8]) -> Data {
         var input = input
-        var output = [UInt8](repeating: 0, count: input.count + 1024)
+        // Incompressible data deflates slightly larger than it started.
+        var output = [UInt8](repeating: 0, count: Int(deflateBound(&stream, uLong(input.count))) + 1024)
         input.withUnsafeMutableBufferPointer { inBuffer in
             output.withUnsafeMutableBufferPointer { outBuffer in
                 stream.next_in = inBuffer.baseAddress
