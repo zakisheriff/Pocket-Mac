@@ -103,6 +103,45 @@ final class RFBClientIntegrationTests: XCTestCase {
         client.disconnect()
     }
 
+    /// A Mac that ignores the first request for its screen must still
+    /// show up, instead of leaving "Waiting for the Mac's screen" forever.
+    func testIgnoredFirstScreenRequestIsAskedAgain() async throws {
+        let server = try FakeRFBServer(login: .vncPassword("pw123456"), width: 3, height: 2, pixels: screenPixels)
+        server.requestsToIgnoreBeforeScreen = 1
+        server.start()
+        let client = RFBClient()
+        client.connect(request(port: server.port, username: "", password: "pw123456"))
+        do {
+            try await waitUntil(timeout: 4) { client.hasScreen }
+        } catch {
+            XCTFail("screen never arrived after an ignored request; state = \(client.state)")
+            return
+        }
+        client.disconnect()
+    }
+
+    /// A Mac that logs in but never sends its screen gets one fresh
+    /// session, then a clear explanation — never an endless spinner.
+    func testMacThatNeverSendsItsScreenFailsClearly() async throws {
+        let server = try FakeRFBServer(login: .vncPassword("pw123456"), width: 3, height: 2, pixels: screenPixels)
+        server.requestsToIgnoreBeforeScreen = .max
+        server.start()
+        let client = RFBClient()
+        client.connect(request(port: server.port, username: "", password: "pw123456"))
+        do {
+            try await waitUntil(timeout: 30) {
+                if case .failed = client.state { return true }
+                return false
+            }
+        } catch {
+            XCTFail("expected a failure; state = \(client.state)")
+            return
+        }
+        XCTAssertEqual(server.connections, 2, "should reconnect once before giving up")
+        guard case .failed(let message) = client.state else { return }
+        XCTAssertTrue(message.contains("Screen Sharing off and on"), message)
+    }
+
     func testHextileAndZlibScreensDecodeExactly() async throws {
         for encoding in [RFBEncoding.hextile, RFBEncoding.zlib] {
             let server = try FakeRFBServer(login: .vncPassword("pw123456"), width: 3, height: 2, pixels: screenPixels)

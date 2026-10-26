@@ -31,6 +31,9 @@ final class FakeRFBServer {
     /// Silently ignore this many update requests, like macOS does when one
     /// arrives while it's busy sending.
     var requestsToDrop = 0
+    /// Ignore this many update requests before the first frame, like a Mac
+    /// still stuck on an earlier session (`Int.max`: never send the screen).
+    var requestsToIgnoreBeforeScreen = 0
     private let listenSocket: Int32
     private let login: Login
     private let width: Int
@@ -43,6 +46,8 @@ final class FakeRFBServer {
     private var _updateRequests = 0
     private var _framesSent = 0
     private var _pointerTimes: [Date] = []
+    private var _connections = 0
+    var connections: Int { lock.withLock { _connections } }
 
     var pointerEvents: [PointerEvent] { lock.withLock { _pointerEvents } }
     var keyEvents: [KeyEvent] { lock.withLock { _keyEvents } }
@@ -93,10 +98,15 @@ final class FakeRFBServer {
 
     func start() {
         Thread { [self] in
-            let client = accept(listenSocket, nil, nil)
-            guard client >= 0 else { return }
-            serve(client)
-            close(client)
+            while true {
+                let client = accept(listenSocket, nil, nil)
+                guard client >= 0 else { return }
+                lock.withLock { _connections += 1 }
+                Thread { [self] in
+                    serve(client)
+                    close(client)
+                }.start()
+            }
         }.start()
     }
 
@@ -172,6 +182,10 @@ final class FakeRFBServer {
             case 3:
                 guard read(fd, 9) != nil else { return }
                 lock.withLock { _updateRequests += 1 }
+                if !sentScreen && requestsToIgnoreBeforeScreen > 0 {
+                    if requestsToIgnoreBeforeScreen != .max { requestsToIgnoreBeforeScreen -= 1 }
+                    continue
+                }
                 if sentScreen && requestsToDrop > 0 {
                     requestsToDrop -= 1
                     continue
