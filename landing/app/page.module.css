@@ -9,11 +9,14 @@
   margin: 0 auto;
 }
 
-/* A square stage: the phone fills its height upright and its width sideways. */
+/* A square stage: the phone fills its height upright and its width sideways.
+   Sizes are explicit lengths (not percentages of an aspect-ratio box), so
+   every browser, Safari included, draws the phone the same size. */
 .stage {
+  --size: min(44vw, 82vh);
   position: relative;
-  width: min(100%, 86svh);
-  aspect-ratio: 1;
+  width: var(--size);
+  height: var(--size);
   justify-self: center;
   display: grid;
   place-items: center;
@@ -22,8 +25,8 @@
 /* iPhone 17 Pro, drawn with the iOS Simulator's own device frame. */
 .phone {
   position: relative;
-  height: 100%;
-  aspect-ratio: 908 / 1816;
+  width: calc(var(--size) / 2);
+  height: var(--size);
   background: url("/iphone-17-pro.png") center / 100% 100% no-repeat;
   filter: drop-shadow(0 40px 60px rgba(0, 0, 0, 0.28));
   transition: transform 0.6s cubic-bezier(0.32, 0.72, 0, 1);
@@ -94,7 +97,7 @@
   }
 
   .stage {
-    width: min(100%, 70svh);
+    --size: min(calc(100vw - 32px), 64vh);
   }
 
   .side {
