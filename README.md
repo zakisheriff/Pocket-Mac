@@ -45,3 +45,15 @@ xcodegen generate
 xcodebuild -project "Pocket Mac.xcodeproj" -scheme "Pocket Mac" \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
 ```
+
+## Testing
+
+```bash
+xcodegen generate
+xcodebuild -project "Pocket Mac.xcodeproj" -scheme "Pocket Mac" \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
