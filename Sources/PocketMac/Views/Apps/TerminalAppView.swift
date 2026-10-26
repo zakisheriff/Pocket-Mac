@@ -63,9 +63,15 @@ struct TerminalAppView: View {
         case .character(let c): currentInput.append(c)
         case .backspace: if !currentInput.isEmpty { currentInput.removeLast() }
         case .return:
-            lines.append("zaki@pocket-mac ~ % " + currentInput)
-            lines.append(response(for: currentInput))
+            let command = currentInput
             currentInput = ""
+            if command.trimmingCharacters(in: .whitespaces) == "clear" {
+                lines.removeAll()
+                return
+            }
+            lines.append("zaki@pocket-mac ~ % " + command)
+            let reply = response(for: command)
+            if !reply.isEmpty { lines.append(reply) }
         case .tab: currentInput.append("    ")
         case .escape: break
         }
@@ -79,7 +85,6 @@ struct TerminalAppView: View {
         case "pwd": return "/Users/zaki"
         case "whoami": return "zaki"
         case "date": return Date.now.formatted()
-        case "clear": lines.removeAll(); return ""
         default: return "zsh: command not found: \(trimmed)"
         }
     }
