@@ -2,10 +2,15 @@ name: Pocket Mac
 options:
   bundleIdPrefix: com.zakisheriff.pocketmac
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "26.0"
   createIntermediateGroups: true
   indentWidth: 4
   tabWidth: 4
+
+packages:
+  BigInt:
+    url: https://github.com/attaswift/BigInt
+    from: 5.3.0
 
 settings:
   base:
@@ -19,11 +24,14 @@ targets:
   Pocket Mac:
     type: application
     platform: iOS
-    deploymentTarget: "17.0"
+    deploymentTarget: "26.0"
     sources:
       - path: Sources/PocketMac
     resources:
       - path: Sources/PocketMac/Resources/Assets.xcassets
+    dependencies:
+      - package: BigInt
+      - sdk: libz.tbd
     info:
       path: Sources/PocketMac/Resources/Info.plist
       properties:
@@ -33,25 +41,21 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        UISupportedInterfaceOrientations~ipad:
-          - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationPortraitUpsideDown
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
-        UIStatusBarHidden: true
         UIRequiresFullScreen: true
         ITSAppUsesNonExemptEncryption: false
+        NSLocalNetworkUsageDescription: Pocket Mac looks for Macs with Screen Sharing turned on so you can control them from your iPhone.
+        NSBonjourServices:
+          - _rfb._tcp
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zakisheriff.pocketmac
         PRODUCT_NAME: Pocket Mac
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-    capabilities: {}
   Pocket Mac Tests:
     type: bundle.unit-test
     platform: iOS
-    deploymentTarget: "17.0"
+    deploymentTarget: "26.0"
     sources:
       - path: Tests/PocketMacTests
     settings:
@@ -60,6 +64,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
       - target: Pocket Mac
+      - package: BigInt
 
 schemes:
   Pocket Mac:
