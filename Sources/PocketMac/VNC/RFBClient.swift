@@ -6,10 +6,28 @@ import UIKit
 
 /// Where and how to log in to a Mac.
 struct MacConnectionRequest {
-    var endpoint: NWEndpoint
+    /// Routes to the Mac, tried in order until one answers.
+    var endpoints: [NWEndpoint]
     var displayName: String
     var username: String
     var password: String
+    /// Told the address that actually worked, so it can be remembered.
+    var onReachedAddress: (@MainActor (String, UInt16) -> Void)?
+
+    init(
+        endpoint: NWEndpoint,
+        fallbacks: [NWEndpoint] = [],
+        displayName: String,
+        username: String,
+        password: String,
+        onReachedAddress: (@MainActor (String, UInt16) -> Void)? = nil
+    ) {
+        endpoints = [endpoint] + fallbacks
+        self.displayName = displayName
+        self.username = username
+        self.password = password
+        self.onReachedAddress = onReachedAddress
+    }
 }
 
 /// Receives the live screen and pointer directly, bypassing SwiftUI so
@@ -76,7 +94,7 @@ final class RFBClient: ObservableObject {
 
     func connect(_ request: MacConnectionRequest) {
         disconnect(newState: .connecting)
-        let stream = RFBStream(endpoint: request.endpoint)
+        let stream = RFBStream(endpoints: request.endpoints)
         self.stream = stream
         hasScreen = false
         cursor = nil
@@ -303,6 +321,11 @@ private final class RFBSession {
         try await stream.open()
         let stream = self.stream
         onMain { $0.update(state: .authenticating, for: stream) }
+        if let reached = stream.reachedAddress, let remember = request.onReachedAddress {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { remember(reached.host, reached.port) }
+            }
+        }
 
         try await handshake()
 
