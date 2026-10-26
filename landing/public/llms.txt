@@ -1,0 +1,35 @@
+# Pocket Mac
+
+> Pocket Mac is a free, open-source iPhone app that lets you see and control your real Mac from your iPhone over macOS Screen Sharing. It shows the Mac's screen live and gives you a trackpad, touch control and a full Mac keyboard. Made by Zaki Sheriff at The Atom (theatom.lk).
+
+- Website: https://pocketmac.theatom.lk
+- Download and source code: https://github.com/zakisheriff/Pocket-Mac
+- Licence: MIT (free)
+- Platform: iPhone, iOS 26 (iPhone 17, 17 Pro, 17 Pro Max)
+- Works with: any Mac with Screen Sharing turned on (System Settings › General › Sharing › Screen Sharing)
+
+## What it does
+
+- Live view of your Mac's screen on your iPhone, in portrait or landscape
+- Trackpad mode: slide one finger to move the pointer, tap to click, two-finger tap to right-click, slide two fingers to scroll, press and hold then drag to move things
+- Touch mode: no pointer — tap, drag and scroll directly on what you see, like a touchscreen Mac
+- Full Mac keyboard with Command, Option, Control, Shift, Escape and arrow keys for shortcuts such as Command-C
+- Pinch to zoom into any part of the Mac's screen
+- Finds Macs on the same Wi-Fi automatically (Bonjour) and remembers them for one-tap reconnects
+- Logs in with your Mac username and password using Apple's Screen Sharing login; remembered passwords are kept only in the iPhone's Keychain
+- iPhone Duo layout: the Mac's screen on the top half, keyboard and trackpad on the bottom half
+
+## How to connect
+
+1. On the Mac, turn on Screen Sharing in System Settings › General › Sharing.
+2. Put the iPhone and the Mac on the same Wi-Fi network.
+3. Open Pocket Mac, tap your Mac under Nearby and log in with your Mac username and password.
+
+Nothing needs to be installed on the Mac.
+
+## FAQ
+
+- Is Pocket Mac free? Yes, it is free and open source under the MIT licence.
+- Does it work with any Mac? It works with Macs that have macOS Screen Sharing turned on.
+- Does it need an internet connection? No. The iPhone and Mac talk directly over the local Wi-Fi network.
+- Is it a real Mac or a simulation? It controls your actual Mac; everything you do happens on the Mac.
