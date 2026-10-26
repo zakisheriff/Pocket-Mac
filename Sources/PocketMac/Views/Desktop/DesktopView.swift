@@ -61,8 +61,13 @@ struct DesktopView: View {
             }
             .animation(.easeOut(duration: 0.2), value: windowManager.launchpadVisible)
             .animation(.easeOut(duration: 0.2), value: windowManager.spotlightVisible)
-            .onAppear { windowManager.canvasBounds = proxy.frame(in: .local) }
-            .onChange(of: proxy.size) { _, _ in windowManager.canvasBounds = proxy.frame(in: .local) }
+            .coordinateSpace(name: DesktopCoordinateSpace.name)
+            .onAppear { windowManager.canvasBounds = proxy.frame(in: .named(DesktopCoordinateSpace.name)) }
+            .onChange(of: proxy.size) { _, _ in
+                windowManager.canvasBounds = proxy.frame(in: .named(DesktopCoordinateSpace.name))
+            }
+            .onPreferenceChange(DockIconFramePreferenceKey.self) { windowManager.dockIconFrames = $0 }
+            .onPreferenceChange(LaunchpadButtonFramePreferenceKey.self) { windowManager.launchpadButtonFrame = $0 }
             .clipped()
         }
     }

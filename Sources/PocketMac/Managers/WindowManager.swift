@@ -14,6 +14,11 @@ final class WindowManager: ObservableObject {
     /// Bounds of the usable desktop canvas, updated by DesktopView on layout.
     var canvasBounds: CGRect = .zero
 
+    /// Dock icon hit rects, in desktop-canvas coordinates, reported live by
+    /// DockView so indirect (trackpad) clicks can reach the dock.
+    @Published var dockIconFrames: [AppKind: CGRect] = [:]
+    @Published var launchpadButtonFrame: CGRect = .zero
+
     private var bounceTokens: [AppKind: UUID] = [:]
     @Published private(set) var bouncingApps: Set<AppKind> = []
 

@@ -19,6 +19,14 @@ struct DockView: View {
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: iconSize * 0.3))
             }
             .buttonStyle(.plain)
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: LaunchpadButtonFramePreferenceKey.self,
+                        value: proxy.frame(in: .named(DesktopCoordinateSpace.name))
+                    )
+                }
+            )
 
             Rectangle()
                 .fill(.white.opacity(0.25))
@@ -74,6 +82,14 @@ struct DockView: View {
             pressedApp = pressing ? app : (pressedApp == app ? nil : pressedApp)
             if pressing { HapticsManager.selectionChanged() }
         }
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: DockIconFramePreferenceKey.self,
+                    value: [app: proxy.frame(in: .named(DesktopCoordinateSpace.name))]
+                )
+            }
+        )
     }
 }
 
