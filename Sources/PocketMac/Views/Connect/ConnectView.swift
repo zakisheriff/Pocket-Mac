@@ -154,10 +154,10 @@ private struct MacRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(name)
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(Color.primary)
                 Text(subtitle)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.secondary)
             }
             Spacer()
             if let isOnline {
