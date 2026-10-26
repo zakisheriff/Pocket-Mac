@@ -22,7 +22,8 @@ enum RFBError: LocalizedError, Equatable {
         case .noSupportedSecurityType(let types):
             return "The Mac didn't offer a login method Pocket Mac supports (offered: \(types.map(String.init).joined(separator: ", ")))."
         case .authenticationFailed(let reason):
-            return reason.isEmpty ? "Wrong username or password." : reason
+            let hint = "Check your Mac username (the short account name) and password, and that your account is allowed under System Settings › General › Sharing › Screen Sharing ⓘ."
+            return reason.isEmpty ? hint : "\(reason). \(hint)"
         case .serverRefused(let reason):
             return reason
         case .protocolViolation(let detail):

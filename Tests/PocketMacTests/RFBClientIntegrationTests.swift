@@ -109,7 +109,9 @@ final class RFBClientIntegrationTests: XCTestCase {
             XCTFail("expected a failure; state = \(client.state)")
             return
         }
-        XCTAssertEqual(client.state, .failed("Authentication failed"))
+        guard case .failed(let message) = client.state else { return XCTFail("expected failure") }
+        XCTAssertTrue(message.hasPrefix("Authentication failed."), message)
+        XCTAssertTrue(message.contains("Screen Sharing"), message)
         XCTAssertNil(client.screen)
     }
 
