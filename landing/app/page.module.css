@@ -1,54 +1,50 @@
 .main {
   min-height: 100svh;
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
   align-items: center;
   gap: clamp(32px, 6vw, 96px);
-  padding: clamp(24px, 6vw, 96px);
+  padding: clamp(24px, 5vw, 80px);
   max-width: 1440px;
   margin: 0 auto;
 }
 
-/* iPhone 17 Pro, held sideways */
+/* A square stage: the phone fills its height upright and its width sideways. */
+.stage {
+  position: relative;
+  width: min(100%, 86svh);
+  aspect-ratio: 1;
+  justify-self: center;
+  display: grid;
+  place-items: center;
+}
+
+/* iPhone 17 Pro, drawn with the iOS Simulator's own device frame. */
 .phone {
   position: relative;
-  width: 100%;
-  aspect-ratio: 2622 / 1206;
-  padding: 1.6%;
-  border-radius: 9% / 19.5%;
-  background: linear-gradient(145deg, #4a4c50, #1c1d20 45%, #3a3c40);
-  box-shadow:
-    inset 0 0 0 1.5px rgba(255, 255, 255, 0.18),
-    0 40px 80px -30px rgba(0, 0, 0, 0.55),
-    0 12px 30px -12px rgba(0, 0, 0, 0.4);
+  height: 100%;
+  aspect-ratio: 908 / 1816;
+  background: url("/iphone-17-pro.png") center / 100% 100% no-repeat;
+  filter: drop-shadow(0 40px 60px rgba(0, 0, 0, 0.28));
+  transition: transform 0.6s cubic-bezier(0.32, 0.72, 0, 1);
 }
 
+.landscape {
+  transform: rotate(-90deg);
+}
+
+/* The screen sits exactly where the simulator draws it, clipped to the
+   iPhone 17 Pro's real screen corners. */
 .screen {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  border-radius: 7.6% / 16.5%;
-  background: #000;
-}
-
-.video {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-/* Dynamic Island, on the left edge in landscape */
-.island {
   position: absolute;
-  left: 2.2%;
-  top: 50%;
-  width: 3.4%;
-  height: 26%;
-  transform: translateY(-50%);
-  border-radius: 999px;
+  left: 5.727%;
+  top: 1.872%;
+  width: 88.546%;
+  height: 96.256%;
+  object-fit: fill;
   background: #000;
+  -webkit-mask: url("/screen-mask.png") center / 100% 100% no-repeat;
+  mask: url("/screen-mask.png") center / 100% 100% no-repeat;
 }
 
 .side {
@@ -93,8 +89,12 @@
   .main {
     grid-template-columns: 1fr;
     align-content: center;
-    gap: 40px;
+    gap: 32px;
     padding: 32px 16px;
+  }
+
+  .stage {
+    width: min(100%, 70svh);
   }
 
   .side {
