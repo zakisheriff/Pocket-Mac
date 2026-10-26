@@ -10,42 +10,59 @@ struct MenuBarView: View {
     private let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        HStack(spacing: 18) {
-            Button(action: onAppleMenu) {
-                Image(systemName: "apple.logo")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .buttonStyle(.plain)
+        GeometryReader { proxy in
+            let isCompact = proxy.size.width < 460
 
-            Text(frontmostApp?.displayName ?? "Finder")
-                .font(.system(size: 13, weight: .bold))
-
-            HStack(spacing: 14) {
-                Text("File")
-                Text("Edit")
-                Text("View")
-                Text("Window")
-                Text("Help")
-            }
-            .font(.system(size: 13))
-            .foregroundStyle(.primary.opacity(0.85))
-
-            Spacer(minLength: 8)
-
-            HStack(spacing: 12) {
-                Image(systemName: "wifi")
-                Image(systemName: "battery.75")
-                Button(action: onSpotlight) {
-                    Image(systemName: "magnifyingglass")
+            HStack(spacing: isCompact ? 10 : 18) {
+                Button(action: onAppleMenu) {
+                    Image(systemName: "apple.logo")
+                        .font(.system(size: 13, weight: .medium))
                 }
                 .buttonStyle(.plain)
-                Text(timeString)
-                    .monospacedDigit()
+
+                Text(frontmostApp?.displayName ?? "Finder")
+                    .font(.system(size: 13, weight: .bold))
+                    .lineLimit(1)
+
+                if isCompact {
+                    Text("⋯")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.primary.opacity(0.85))
+                } else {
+                    HStack(spacing: 14) {
+                        Text("File")
+                        Text("Edit")
+                        Text("View")
+                        Text("Window")
+                        Text("Help")
+                    }
+                    .font(.system(size: 13))
+                    .foregroundStyle(.primary.opacity(0.85))
+                    .fixedSize()
+                }
+
+                Spacer(minLength: 8)
+
+                HStack(spacing: isCompact ? 8 : 12) {
+                    Image(systemName: "wifi")
+                    if !isCompact {
+                        Image(systemName: "battery.75")
+                    }
+                    Button(action: onSpotlight) {
+                        Image(systemName: "magnifyingglass")
+                    }
+                    .buttonStyle(.plain)
+                    Text(timeString(compact: isCompact))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                }
+                .font(.system(size: 13))
             }
-            .font(.system(size: 13))
+            .padding(.horizontal, 14)
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 14)
         .frame(height: 26)
         .frame(maxWidth: .infinity)
         .background(.black.opacity(0.001)) // keeps full-width hit testing without a hard edge
@@ -54,9 +71,9 @@ struct MenuBarView: View {
         .onReceive(clock) { now = $0 }
     }
 
-    private var timeString: String {
+    private func timeString(compact: Bool) -> String {
         let formatter = DateFormatter()
-        formatter.dateFormat = "EEE h:mm a"
+        formatter.dateFormat = compact ? "h:mm a" : "EEE h:mm a"
         return formatter.string(from: now)
     }
 }
