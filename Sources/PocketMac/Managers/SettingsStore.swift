@@ -21,12 +21,34 @@ enum LayoutMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// How the phone draws the pointer over the Mac's screen.
+enum PointerStyle: String, CaseIterable, Identifiable {
+    case macArrow, whiteArrow, ring, dot
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .macArrow: return "Mac Arrow"
+        case .whiteArrow: return "White Arrow"
+        case .ring: return "Ring"
+        case .dot: return "Dot"
+        }
+    }
+}
+
 @MainActor
 final class SettingsStore: ObservableObject {
     @AppStorage("pocketmac.layoutMode") var layoutModeRaw: String = LayoutMode.direct.rawValue
     @AppStorage("pocketmac.pointerSensitivity") var pointerSensitivity: Double = 1.6
     @AppStorage("pocketmac.reverseScrolling") var reverseScrolling: Bool = false
-    @AppStorage("pocketmac.pointerSize") var pointerSize: Double = 26
+    @AppStorage("pocketmac.pointerSize") var pointerSize: Double = 24
+    @AppStorage("pocketmac.pointerStyle") var pointerStyleRaw: String = PointerStyle.macArrow.rawValue
+
+    var pointerStyle: PointerStyle {
+        get { PointerStyle(rawValue: pointerStyleRaw) ?? .macArrow }
+        set { pointerStyleRaw = newValue.rawValue }
+    }
 
     var layoutMode: LayoutMode {
         get { LayoutMode(rawValue: layoutModeRaw) ?? .direct }
