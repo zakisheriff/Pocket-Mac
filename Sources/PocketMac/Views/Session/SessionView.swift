@@ -50,7 +50,8 @@ struct SessionView: View {
                 trackpad: input.trackpadActions,
                 allowsZoom: true,
                 bottomInset: keyboardVisible ? keyboardHeight : 0,
-                pointerSize: CGFloat(settings.pointerSize)
+                pointerSize: CGFloat(settings.pointerSize),
+                pointerStyle: settings.pointerStyle
             )
             .overlay(alignment: .topTrailing) {
                 controls(showsKeyboardToggle: true)
@@ -70,7 +71,8 @@ struct SessionView: View {
     /// half, a keyboard and trackpad on the bottom half.
     private func duoLayout(size: CGSize) -> some View {
         VStack(spacing: 0) {
-            RemoteScreenView(client: client, pointerSize: CGFloat(settings.pointerSize))
+            RemoteScreenView(client: client, pointerSize: CGFloat(settings.pointerSize),
+                pointerStyle: settings.pointerStyle)
                 .frame(height: size.height * 0.48)
                 .overlay(alignment: .topTrailing) {
                     controls(showsKeyboardToggle: false)

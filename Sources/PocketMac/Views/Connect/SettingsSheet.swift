@@ -26,22 +26,26 @@ struct SettingsSheet: View {
                 }
 
                 Section("Pointer") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text("Pointer Size")
-                            Spacer()
-                            Circle()
-                                .fill(Color.gray.opacity(0.3))
-                                .strokeBorder(Color.primary.opacity(0.6), lineWidth: 1.5)
-                                .frame(width: settings.pointerSize, height: settings.pointerSize)
-                                .frame(width: 60, height: 60)
+                    HStack(spacing: 10) {
+                        ForEach(PointerStyle.allCases) { style in
+                            PointerStyleOption(
+                                style: style,
+                                isSelected: settings.pointerStyle == style
+                            ) {
+                                HapticsManager.selectionChanged()
+                                settings.pointerStyle = style
+                            }
                         }
+                    }
+                    .padding(.vertical, 4)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Pointer Size")
                         Slider(value: $settings.pointerSize, in: 14...56) {
                             Text("Pointer Size")
                         } minimumValueLabel: {
-                            Image(systemName: "circle").font(.caption2)
+                            Image(systemName: "cursorarrow").font(.caption2)
                         } maximumValueLabel: {
-                            Image(systemName: "circle").font(.title3)
+                            Image(systemName: "cursorarrow").font(.title3)
                         } onEditingChanged: { _ in
                             HapticsManager.selectionChanged()
                         }
@@ -84,6 +88,35 @@ struct SettingsSheet: View {
                 }
             }
         }
+    }
+}
+
+private struct PointerStyleOption: View {
+    let style: PointerStyle
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(uiImage: PointerImages.image(for: style, pointerSize: 26))
+                    .frame(width: 44, height: 44)
+                    .background(Color(white: 0.55), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 2.5)
+                    )
+                Text(style.displayName)
+                    .font(.caption2)
+                    .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(style.displayName)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 

@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import UIKit
 
@@ -8,7 +9,8 @@ struct RemoteScreenView: UIViewRepresentable {
     var trackpad: TrackpadGestureHandler.Actions?
     var allowsZoom = false
     var bottomInset: CGFloat = 0
-    var pointerSize: CGFloat = 26
+    var pointerSize: CGFloat = 24
+    var pointerStyle: PointerStyle = .macArrow
 
     func makeUIView(context: Context) -> RemoteScreenUIView {
         let view = RemoteScreenUIView()
@@ -46,7 +48,7 @@ struct RemoteScreenView: UIViewRepresentable {
             }
             context.coordinator.handler.actions = actions
         }
-        view.setPointerSize(pointerSize)
+        view.setPointer(style: pointerStyle, size: pointerSize)
         view.setBottomInset(bottomInset)
     }
 
@@ -58,17 +60,22 @@ struct RemoteScreenView: UIViewRepresentable {
     }
 }
 
-/// Renders the Mac's screen from zero-copy frame images and keeps a
-/// viewport (zoom + pan) that the pointer never yanks around.
+/// Renders the Mac's screen through Metal straight from the shared
+/// framebuffer (falling back to zero-copy images), and keeps a viewport
+/// (zoom + pan) that the pointer never yanks around.
 final class RemoteScreenUIView: UIView, RemoteDisplaySink {
     weak var client: RFBClient?
 
     private let screenLayer = CALayer()
+    private let metal = MetalScreenRenderer()
+    private var usesMetal = false
+    private var surface: IOSurface?
     private let pointerLayer = CALayer()
     private var screenSize: CGSize = .zero
     private var pointer: CGPoint = .zero
     private var cursor: RFBCursor?
-    private var pointerDiameter: CGFloat = 26
+    private var pointerSize: CGFloat = 24
+    private var pointerStyle: PointerStyle = .macArrow
     /// Space covered by the keyboard; the Mac screen re-centres above it.
     private var bottomInset: CGFloat = 0
 
@@ -90,8 +97,10 @@ final class RemoteScreenUIView: UIView, RemoteDisplaySink {
         screenLayer.backgroundColor = UIColor.black.cgColor
         pointerLayer.zPosition = 1
         pointerLayer.isHidden = true
-        stylePointerRing()
+        pointerLayer.contentsGravity = .resize
+        applyPointerImage()
         layer.addSublayer(screenLayer)
+        if let metal { layer.addSublayer(metal.layer) }
         layer.addSublayer(pointerLayer)
     }
 
@@ -99,12 +108,32 @@ final class RemoteScreenUIView: UIView, RemoteDisplaySink {
 
     // MARK: RemoteDisplaySink
 
-    func display(image: CGImage?, size: CGSize) {
+    func display(surface: IOSurface?, size: CGSize) {
+        self.surface = surface
+        usesMetal = metal?.setSurface(surface, width: Int(size.width), height: Int(size.height)) ?? false
+        if surface != nil {
+            Logger(subsystem: "com.zakisheriff.pocketmac", category: "session")
+                .notice("Pocket Mac: rendering \(Int(size.width))x\(Int(size.height)) with \(self.usesMetal ? "Metal (zero-copy)" : "image fallback", privacy: .public)")
+        }
         withoutAnimation {
-            screenLayer.contents = image
+            metal?.layer.isHidden = !usesMetal
+            screenLayer.isHidden = usesMetal
+            if !usesMetal { screenLayer.contents = nil }
             if size != screenSize {
                 screenSize = size
-                layoutScreen()
+            }
+            layoutScreen()
+        }
+    }
+
+    func frameUpdated() {
+        if usesMetal {
+            metal?.draw()
+        } else if let surface {
+            withoutAnimation {
+                screenLayer.contents = RFBFramebuffer.liveImage(
+                    of: surface, width: Int(screenSize.width), height: Int(screenSize.height)
+                )
             }
         }
     }
@@ -122,12 +151,8 @@ final class RemoteScreenUIView: UIView, RemoteDisplaySink {
         withoutAnimation {
             if let cursor {
                 pointerLayer.contents = cursor.image
-                pointerLayer.backgroundColor = nil
-                pointerLayer.borderWidth = 0
-                pointerLayer.shadowOpacity = 0
             } else {
-                pointerLayer.contents = nil
-                stylePointerRing()
+                applyPointerImage()
             }
             layoutScreen()
         }
@@ -169,11 +194,12 @@ final class RemoteScreenUIView: UIView, RemoteDisplaySink {
 
     // MARK: Layout
 
-    func setPointerSize(_ diameter: CGFloat) {
-        guard diameter != pointerDiameter else { return }
-        pointerDiameter = diameter
+    func setPointer(style: PointerStyle, size: CGFloat) {
+        guard style != pointerStyle || size != pointerSize else { return }
+        pointerStyle = style
+        pointerSize = size
         withoutAnimation {
-            stylePointerRing()
+            applyPointerImage()
             layoutScreen()
         }
     }
@@ -236,6 +262,7 @@ final class RemoteScreenUIView: UIView, RemoteDisplaySink {
         let frame = currentScreenFrame()
         panOrigin = frame.origin
         screenLayer.frame = frame
+        metal?.layer.frame = frame
 
         let scale = pointsPerMacPoint
         let tip = CGPoint(x: frame.minX + pointer.x * scale, y: frame.minY + pointer.y * scale)
@@ -251,23 +278,18 @@ final class RemoteScreenUIView: UIView, RemoteDisplaySink {
         } else {
             // macOS draws its own arrow into the screen; the ring marks where
             // the pointer is right now, so the two read as one pointer.
+            let size = PointerImages.size(for: pointerStyle, pointerSize: pointerSize)
+            let hotspot = PointerImages.hotspot(for: pointerStyle)
             pointerLayer.frame = CGRect(
-                x: tip.x - pointerDiameter / 2, y: tip.y - pointerDiameter / 2,
-                width: pointerDiameter, height: pointerDiameter
+                x: tip.x - hotspot.x * size.width, y: tip.y - hotspot.y * size.height,
+                width: size.width, height: size.height
             )
         }
     }
 
-    private func stylePointerRing() {
+    private func applyPointerImage() {
         guard cursor == nil else { return }
-        pointerLayer.cornerRadius = pointerDiameter / 2
-        pointerLayer.backgroundColor = UIColor(white: 0.5, alpha: 0.28).cgColor
-        pointerLayer.borderColor = UIColor(white: 1, alpha: 0.85).cgColor
-        pointerLayer.borderWidth = 1.5
-        pointerLayer.shadowColor = UIColor.black.cgColor
-        pointerLayer.shadowOpacity = 0.35
-        pointerLayer.shadowRadius = 3
-        pointerLayer.shadowOffset = .zero
+        pointerLayer.contents = PointerImages.image(for: pointerStyle, pointerSize: pointerSize).cgImage
     }
 
     private func withoutAnimation(_ body: () -> Void) {
