@@ -6,7 +6,6 @@ struct SessionView: View {
     @ObservedObject var settings: SettingsStore
     @StateObject private var input: SessionInputController
     @State private var keyboardVisible = false
-    @State private var showingGuide = false
     @State private var showingSettings = false
 
     init(client: RFBClient, settings: SettingsStore) {
@@ -29,7 +28,6 @@ struct SessionView: View {
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .overlay { statusOverlay }
-        .sheet(isPresented: $showingGuide) { GestureGuideSheet() }
         .sheet(isPresented: $showingSettings) { SettingsSheet(settings: settings) }
         .onChange(of: client.state) { _, state in
             if state == .connected { HapticsManager.success() }
@@ -101,49 +99,35 @@ struct SessionView: View {
     private func controls(showsKeyboardToggle: Bool) -> some View {
         GlassEffectContainer(spacing: 10) {
             HStack(spacing: 10) {
-                Button {
-                    HapticsManager.tap()
-                    showingGuide = true
-                } label: {
-                    Image(systemName: "questionmark")
-                }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .accessibilityLabel("How to use")
-
-                Button {
+                controlButton("gearshape", label: "Settings and help") {
                     HapticsManager.tap()
                     showingSettings = true
-                } label: {
-                    Image(systemName: "gearshape")
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .accessibilityLabel("Settings")
-
                 if showsKeyboardToggle {
-                    Button {
+                    controlButton(keyboardVisible ? "keyboard.chevron.compact.down" : "keyboard",
+                                  label: keyboardVisible ? "Hide keyboard" : "Show keyboard") {
                         HapticsManager.tap()
                         keyboardVisible.toggle()
-                    } label: {
-                        Image(systemName: keyboardVisible ? "keyboard.chevron.compact.down" : "keyboard")
                     }
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.circle)
-                    .accessibilityLabel(keyboardVisible ? "Hide keyboard" : "Show keyboard")
                 }
-
-                Button {
+                controlButton("xmark", label: "Disconnect") {
                     HapticsManager.appOpen()
                     client.disconnect()
-                } label: {
-                    Image(systemName: "xmark")
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .accessibilityLabel("Disconnect")
             }
         }
+    }
+
+    /// Every control the same size, whatever its symbol's natural width.
+    private func controlButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 17, weight: .semibold))
+                .frame(width: 26, height: 26)
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .accessibilityLabel(label)
     }
 
     // MARK: Status

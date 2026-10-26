@@ -61,45 +61,19 @@ struct SettingsSheet: View {
                     Toggle("Reverse Scrolling", isOn: $settings.reverseScrolling)
                         .onChange(of: settings.reverseScrolling) { HapticsManager.selectionChanged() }
                 }
-            }
-            .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
-                        HapticsManager.tap()
-                        dismiss()
-                    }
-                }
-            }
-        }
-    }
-}
 
-/// How to drive the Mac from the phone.
-struct GestureGuideSheet: View {
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section("Pointer") {
+                Section("How to Use") {
                     GuideRow(symbol: "hand.point.up.left", title: "Move the pointer", detail: "Slide one finger anywhere")
                     GuideRow(symbol: "hand.tap", title: "Click", detail: "Tap once — tap twice to double-click")
                     GuideRow(symbol: "hand.tap.fill", title: "Right-click", detail: "Tap with two fingers")
                     GuideRow(symbol: "hand.draw", title: "Drag or select text", detail: "Press and hold, then slide")
-                }
-                Section("Screen") {
                     GuideRow(symbol: "arrow.up.and.down", title: "Scroll", detail: "Slide two fingers")
                     GuideRow(symbol: "plus.magnifyingglass", title: "Zoom", detail: "Pinch with two fingers")
                     GuideRow(symbol: "arrow.up.and.down.and.arrow.left.and.right", title: "Move around when zoomed", detail: "Slide two fingers")
-                }
-                Section("Keyboard") {
-                    GuideRow(symbol: "keyboard", title: "Type", detail: "Tap the keyboard button")
                     GuideRow(symbol: "command", title: "Shortcuts like ⌘C", detail: "Tap ⌘ then the key — double-tap a modifier to lock it")
                 }
             }
-            .navigationTitle("How to Use")
+            .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
