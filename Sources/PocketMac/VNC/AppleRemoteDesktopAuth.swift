@@ -1,5 +1,4 @@
 import Foundation
-import BigInt
 import CommonCrypto
 import CryptoKit
 
@@ -24,27 +23,30 @@ enum AppleRemoteDesktopAuth {
         var encoded: Data { encryptedCredentials + clientPublicKey }
     }
 
+    /// macOS uses a 4096-bit group; a 512-bit secret exponent keeps the
+    /// exchange strong while keeping login fast.
+    static let secretLength = 64
+
     static func response(
         to challenge: Challenge,
         username: String,
         password: String,
-        privateKey: BigUInt? = nil,
+        secret: Data? = nil,
         padding: Data? = nil
     ) -> Response {
-        let prime = BigUInt(challenge.prime)
-        let generator = BigUInt(challenge.generator)
-        let serverPublic = BigUInt(challenge.serverPublicKey)
-        let secret = privateKey ?? BigUInt.randomInteger(lessThan: prime - 2) + 1
+        let secret = secret ?? randomBytes(secretLength)
+        var generator = Data()
+        generator.appendBE(challenge.generator)
 
-        let clientPublic = generator.power(secret, modulus: prime)
-        let shared = serverPublic.power(secret, modulus: prime)
+        let clientPublic = MontgomeryModPow.power(base: generator, exponent: secret, modulus: challenge.prime)
+        let shared = MontgomeryModPow.power(base: challenge.serverPublicKey, exponent: secret, modulus: challenge.prime)
 
-        let aesKey = Data(Insecure.MD5.hash(data: leftPad(shared.serialize(), to: challenge.keyLength)))
+        let aesKey = Data(Insecure.MD5.hash(data: leftPad(shared, to: challenge.keyLength)))
         let credentials = credentialBlock(username: username, password: password, padding: padding)
 
         return Response(
             encryptedCredentials: aes128ECB(credentials, key: aesKey, operation: CCOperation(kCCEncrypt)),
-            clientPublicKey: leftPad(clientPublic.serialize(), to: challenge.keyLength)
+            clientPublicKey: leftPad(clientPublic, to: challenge.keyLength)
         )
     }
 
@@ -87,7 +89,8 @@ enum AppleRemoteDesktopAuth {
     }
 
     private static func randomBytes(_ count: Int) -> Data {
-        var generator = SystemRandomNumberGenerator()
-        return Data((0..<count).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+        var bytes = [UInt8](repeating: 0, count: count)
+        _ = SecRandomCopyBytes(kSecRandomDefault, count, &bytes)
+        return Data(bytes)
     }
 }

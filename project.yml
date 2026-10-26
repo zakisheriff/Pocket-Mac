@@ -30,7 +30,6 @@ targets:
     resources:
       - path: Sources/PocketMac/Resources/Assets.xcassets
     dependencies:
-      - package: BigInt
       - sdk: libz.tbd
     info:
       path: Sources/PocketMac/Resources/Info.plist
