@@ -4,34 +4,36 @@ import UIKit
 /// Shows the Mac's live screen with the pointer drawn locally on top.
 /// When `trackpad` is set, the whole view is also a trackpad.
 struct RemoteScreenView: UIViewRepresentable {
-    @ObservedObject var client: RFBClient
+    let client: RFBClient
     var trackpad: TrackpadGestureHandler.Actions?
     var allowsZoom = false
     var bottomInset: CGFloat = 0
 
     func makeUIView(context: Context) -> RemoteScreenUIView {
         let view = RemoteScreenUIView()
-        if var actions = trackpad {
-            if allowsZoom {
-                actions.pinch = { [weak view] scale in view?.applyPinch(scale) }
-            }
-            context.coordinator.handler.actions = actions
+        if trackpad != nil {
             context.coordinator.handler.macPointsPerTouchPoint = { [weak view] in
                 1 / (view?.pointsPerMacPoint ?? 1)
             }
             context.coordinator.handler.attach(to: view)
         }
+        configure(view, context: context)
+        client.display = view
         return view
     }
 
     func updateUIView(_ view: RemoteScreenUIView, context: Context) {
+        configure(view, context: context)
+        if client.display !== view { client.display = view }
+    }
+
+    private func configure(_ view: RemoteScreenUIView, context: Context) {
         if var actions = trackpad {
             if allowsZoom {
                 actions.pinch = { [weak view] scale in view?.applyPinch(scale) }
             }
             context.coordinator.handler.actions = actions
         }
-        view.render(image: client.screen, screenSize: client.screenSize, pointer: client.pointer, cursor: client.cursor)
         view.setBottomInset(bottomInset)
     }
 
@@ -43,12 +45,16 @@ struct RemoteScreenView: UIViewRepresentable {
     }
 }
 
-final class RemoteScreenUIView: UIView {
+/// Renders the Mac's screen straight from the shared IOSurface: each frame
+/// is just "contents changed" on a GPU layer, with no image copies.
+final class RemoteScreenUIView: UIView, RemoteDisplaySink {
     private let screenLayer = CALayer()
     private let cursorLayer = CALayer()
     private var screenSize: CGSize = .zero
     private var pointer: CGPoint = .zero
     private var cursor: RFBCursor?
+    /// Space covered by the keyboard; the Mac screen re-centres above it.
+    private var bottomInset: CGFloat = 0
 
     /// 1 = whole Mac screen fits; above 1 the view zooms in and follows the pointer.
     private(set) var zoom: CGFloat = 1
@@ -58,34 +64,48 @@ final class RemoteScreenUIView: UIView {
         backgroundColor = .black
         clipsToBounds = true
         screenLayer.magnificationFilter = .linear
-        screenLayer.minificationFilter = .trilinear
+        screenLayer.minificationFilter = .linear
         screenLayer.contentsGravity = .resize
+        screenLayer.isOpaque = true
+        screenLayer.backgroundColor = UIColor.black.cgColor
         cursorLayer.contentsGravity = .resize
+        cursorLayer.contents = Self.arrowImage
         cursorLayer.zPosition = 1
+        cursorLayer.isHidden = true
         layer.addSublayer(screenLayer)
         layer.addSublayer(cursorLayer)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    /// Space covered by the keyboard; the Mac screen re-centres above it.
-    private var bottomInset: CGFloat = 0
+    // MARK: RemoteDisplaySink
 
-    func render(image: CGImage?, screenSize: CGSize, pointer: CGPoint, cursor: RFBCursor?) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        if let image, (screenLayer.contents as! CGImage?) !== image {
+    func display(image: CGImage?, size: CGSize) {
+        withoutAnimation {
             screenLayer.contents = image
+            if size != screenSize {
+                screenSize = size
+                layoutScreen()
+            }
         }
-        if cursor != self.cursor || cursorLayer.contents == nil {
-            cursorLayer.contents = cursor?.image ?? Self.arrowImage
-        }
-        self.screenSize = screenSize
-        self.pointer = pointer
-        self.cursor = cursor
-        layoutScreen()
-        CATransaction.commit()
     }
+
+    func pointerMoved(to point: CGPoint) {
+        pointer = point
+        withoutAnimation {
+            if zoom > 1 { layoutScreen() } else { layoutCursor(in: screenLayer.frame, scale: pointsPerMacPoint) }
+        }
+    }
+
+    func cursorChanged(_ cursor: RFBCursor?) {
+        self.cursor = cursor
+        withoutAnimation {
+            cursorLayer.contents = cursor?.image ?? Self.arrowImage
+            layoutScreen()
+        }
+    }
+
+    // MARK: Layout
 
     /// Slides the Mac screen up or down to make room for the keyboard,
     /// animated on the GPU so the live view never re-lays out per frame.
@@ -101,18 +121,12 @@ final class RemoteScreenUIView: UIView {
 
     func applyPinch(_ scale: CGFloat) {
         zoom = min(max(zoom * scale, 1), 5)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        layoutScreen()
-        CATransaction.commit()
+        withoutAnimation { layoutScreen() }
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        layoutScreen()
-        CATransaction.commit()
+        withoutAnimation { layoutScreen() }
     }
 
     private var visibleSize: CGSize {
@@ -147,8 +161,12 @@ final class RemoteScreenUIView: UIView {
             height: size.height
         )
         screenLayer.frame = frame
-        cursorLayer.isHidden = false
+        layoutCursor(in: frame, scale: scale)
+    }
 
+    private func layoutCursor(in frame: CGRect, scale: CGFloat) {
+        guard screenSize.width > 0 else { return }
+        cursorLayer.isHidden = false
         let tip = CGPoint(x: frame.minX + pointer.x * scale, y: frame.minY + pointer.y * scale)
         if let cursor {
             // Keep the Mac's own pointer readable even when the screen is shrunk onto a phone.
@@ -165,6 +183,13 @@ final class RemoteScreenUIView: UIView {
                 width: Self.arrowSize.width, height: Self.arrowSize.height
             )
         }
+    }
+
+    private func withoutAnimation(_ body: () -> Void) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        body()
+        CATransaction.commit()
     }
 
     // MARK: Fallback pointer
@@ -190,12 +215,10 @@ final class RemoteScreenUIView: UIView {
             path.close()
             path.lineJoinStyle = .round
             context.cgContext.setShadow(offset: CGSize(width: 0, height: 0.6), blur: 1.2, color: UIColor(white: 0, alpha: 0.45).cgColor)
-            UIColor.black.setFill()
-            path.fill()
-            context.cgContext.setShadow(offset: .zero, blur: 0, color: nil)
             UIColor.white.setStroke()
-            path.lineWidth = 1.3
+            path.lineWidth = 2.2
             path.stroke()
+            context.cgContext.setShadow(offset: .zero, blur: 0, color: nil)
             UIColor.black.setFill()
             path.fill()
         }
