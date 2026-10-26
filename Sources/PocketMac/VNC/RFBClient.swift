@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import IOSurface
 import Network
 import UIKit
 
@@ -11,8 +12,17 @@ struct MacConnectionRequest {
     var password: String
 }
 
-/// A live Screen Sharing session with one Mac. Publishes the Mac's screen
-/// and pointer shape for the UI and sends mouse/keyboard input back.
+/// Receives the live screen and pointer directly, bypassing SwiftUI so
+/// frames and pointer movement never wait on a view re-render.
+@MainActor
+protocol RemoteDisplaySink: AnyObject {
+    /// A new frame. The image reads the live framebuffer without copying.
+    func display(image: CGImage?, size: CGSize)
+    func pointerMoved(to point: CGPoint)
+    func cursorChanged(_ cursor: RFBCursor?)
+}
+
+/// A live Screen Sharing session with one Mac.
 @MainActor
 final class RFBClient: ObservableObject {
     enum State: Equatable {
@@ -25,17 +35,27 @@ final class RFBClient: ObservableObject {
     }
 
     @Published private(set) var state: State = .idle
-    @Published private(set) var screen: CGImage?
+    @Published private(set) var hasScreen = false
     @Published private(set) var screenSize: CGSize = .zero
     @Published private(set) var desktopName = ""
-    @Published private(set) var cursor: RFBCursor?
 
-    /// Pointer position in the Mac's screen coordinates.
-    @Published private(set) var pointer: CGPoint = .zero
+    /// Pointer position in the Mac's screen coordinates. Not published:
+    /// it changes at touch rate and goes straight to the display sink.
+    private(set) var pointer: CGPoint = .zero
+    private(set) var cursor: RFBCursor?
     private(set) var buttons: RFBButtons = []
+
+    weak var display: RemoteDisplaySink? {
+        didSet {
+            display?.display(image: framebuffer?.makeLiveImage(), size: screenSize)
+            display?.cursorChanged(cursor)
+            display?.pointerMoved(to: pointer)
+        }
+    }
 
     private var stream: RFBStream?
     private var sessionTask: Task<Void, Never>?
+    private var framebuffer: RFBFramebuffer?
 
     var isActive: Bool {
         state == .connecting || state == .authenticating || state == .connected
@@ -45,8 +65,11 @@ final class RFBClient: ObservableObject {
         disconnect(newState: .connecting)
         let stream = RFBStream(endpoint: request.endpoint)
         self.stream = stream
-        screen = nil
+        hasScreen = false
         cursor = nil
+        framebuffer = nil
+        display?.display(image: nil, size: .zero)
+        display?.cursorChanged(nil)
 
         sessionTask = Task.detached(priority: .userInitiated) { [weak self] in
             let session = RFBSession(stream: stream, request: request, client: self)
@@ -80,14 +103,21 @@ final class RFBClient: ObservableObject {
         state = newState
     }
 
+    /// A copy of the current screen (for tests and snapshots).
+    func snapshot() -> CGImage? {
+        framebuffer?.makeImage()
+    }
+
     // MARK: - Input
 
     func movePointer(to point: CGPoint) {
         guard screenSize != .zero else { return }
-        pointer = CGPoint(
+        let clamped = CGPoint(
             x: min(max(point.x, 0), screenSize.width - 1),
             y: min(max(point.y, 0), screenSize.height - 1)
         )
+        pointer = clamped
+        display?.pointerMoved(to: clamped)
         sendPointer()
     }
 
@@ -166,22 +196,32 @@ final class RFBClient: ObservableObject {
         state = newState
     }
 
-    fileprivate func sessionStarted(stream: RFBStream, name: String, size: CGSize) {
+    fileprivate func sessionStarted(stream: RFBStream, name: String, framebuffer: RFBFramebuffer) {
         guard stream === self.stream else { return }
         desktopName = name
-        screenSize = size
-        pointer = CGPoint(x: size.width / 2, y: size.height / 2)
+        self.framebuffer = framebuffer
+        screenSize = CGSize(width: framebuffer.width, height: framebuffer.height)
+        pointer = CGPoint(x: screenSize.width / 2, y: screenSize.height / 2)
+        display?.display(image: nil, size: screenSize)
+        display?.pointerMoved(to: pointer)
         state = .connected
     }
 
-    fileprivate func publish(stream: RFBStream, image: CGImage?, size: CGSize, cursor newCursor: RFBCursor?) {
-        guard stream === self.stream else { return }
+    fileprivate func framebufferUpdated(stream: RFBStream) {
+        guard stream === self.stream, let framebuffer else { return }
+        let size = CGSize(width: framebuffer.width, height: framebuffer.height)
         if size != screenSize {
             screenSize = size
             movePointer(to: pointer)
         }
-        if let image { screen = image }
-        if let newCursor { cursor = newCursor }
+        if !hasScreen { hasScreen = true }
+        display?.display(image: framebuffer.makeLiveImage(), size: size)
+    }
+
+    fileprivate func cursorChanged(stream: RFBStream, cursor newCursor: RFBCursor) {
+        guard stream === self.stream else { return }
+        cursor = newCursor
+        display?.cursorChanged(newCursor)
     }
 
     fileprivate func receivedClipboard(stream: RFBStream, text: String) {
@@ -197,6 +237,24 @@ final class RFBClient: ObservableObject {
     }
 }
 
+/// At most one frame in flight to the main thread.
+private final class FrameGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending = false
+
+    func claim() -> Bool {
+        lock.withLock {
+            guard !pending else { return false }
+            pending = true
+            return true
+        }
+    }
+
+    func release() {
+        lock.withLock { pending = false }
+    }
+}
+
 /// Runs the RFB protocol for one connection off the main thread.
 private final class RFBSession {
     private let stream: RFBStream
@@ -204,6 +262,7 @@ private final class RFBSession {
     private weak var client: RFBClient?
     private var framebuffer = RFBFramebuffer(width: 0, height: 0)
     private let zrle = ZRLEDecoder()
+    private let frameGate = FrameGate()
 
     init(stream: RFBStream, request: MacConnectionRequest, client: RFBClient?) {
         self.stream = stream
@@ -211,9 +270,21 @@ private final class RFBSession {
         self.client = client
     }
 
+    /// Fire-and-forget hop to the main thread: the receive loop never waits
+    /// for the UI, so a busy main thread can't slow the screen stream.
+    private func onMain(_ work: @escaping @MainActor (RFBClient) -> Void) {
+        let client = self.client
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                if let client { work(client) }
+            }
+        }
+    }
+
     func run() async throws {
         try await stream.open()
-        await client?.update(state: .authenticating, for: stream)
+        let stream = self.stream
+        onMain { $0.update(state: .authenticating, for: stream) }
 
         try await handshake()
 
@@ -224,15 +295,16 @@ private final class RFBSession {
         let nameLength = Int(try await stream.readU32())
         let name = String(decoding: try await stream.read(nameLength), as: UTF8.self)
 
-        framebuffer = RFBFramebuffer(width: width, height: height)
+        let framebuffer = RFBFramebuffer(width: width, height: height)
+        self.framebuffer = framebuffer
         stream.enqueue(RFBClientMessage.setPixelFormat(.bgrx))
         stream.enqueue(RFBClientMessage.setEncodings([
             RFBEncoding.zrle, RFBEncoding.copyRect, RFBEncoding.raw,
             RFBEncoding.cursor, RFBEncoding.desktopSize,
         ]))
         requestUpdate(incremental: false)
-        await client?.sessionStarted(stream: stream, name: name.isEmpty ? request.displayName : name,
-                                     size: CGSize(width: width, height: height))
+        let displayName = name.isEmpty ? request.displayName : name
+        onMain { $0.sessionStarted(stream: stream, name: displayName, framebuffer: framebuffer) }
 
         while !Task.isCancelled {
             try await readServerMessage()
@@ -318,6 +390,7 @@ private final class RFBSession {
 
     private func readServerMessage() async throws {
         let type = try await stream.readU8()
+        let stream = self.stream
         switch type {
         case 0:
             try await readFramebufferUpdate()
@@ -326,12 +399,12 @@ private final class RFBSession {
             let count = Int(try await stream.readU16())
             _ = try await stream.read(count * 6)
         case 2:
-            await MainActor.run { HapticsManager.tap() }
+            DispatchQueue.main.async { HapticsManager.tap() }
         case 3:
             _ = try await stream.read(3)
             let length = Int(try await stream.readU32())
             let text = String(data: try await stream.read(length), encoding: .isoLatin1) ?? ""
-            await client?.receivedClipboard(stream: stream, text: text)
+            onMain { $0.receivedClipboard(stream: stream, text: text) }
         default:
             throw RFBError.protocolViolation("unknown server message \(type)")
         }
@@ -340,8 +413,11 @@ private final class RFBSession {
     private func readFramebufferUpdate() async throws {
         _ = try await stream.readU8()
         let rectangles = Int(try await stream.readU16())
-        var newCursor: RFBCursor?
-        var screenChanged = false
+        let stream = self.stream
+
+        // Ask for the next frame now, so the Mac prepares it while this one
+        // is still downloading and decoding — removes a full round trip.
+        requestUpdate(incremental: true)
 
         for _ in 0..<rectangles {
             let x = Int(try await stream.readU16())
@@ -354,33 +430,41 @@ private final class RFBSession {
             case RFBEncoding.raw:
                 let pixels = try await stream.read(width * height * 4)
                 try framebuffer.blitRaw(x: x, y: y, width: width, height: height, data: pixels)
-                screenChanged = true
             case RFBEncoding.copyRect:
                 let sourceX = Int(try await stream.readU16())
                 let sourceY = Int(try await stream.readU16())
                 try framebuffer.copyRect(fromX: sourceX, fromY: sourceY, toX: x, toY: y, width: width, height: height)
-                screenChanged = true
             case RFBEncoding.zrle:
                 let length = Int(try await stream.readU32())
                 let compressed = try await stream.read(length)
                 try zrle.decode(x: x, y: y, width: width, height: height, compressed: compressed, into: framebuffer)
-                screenChanged = true
             case RFBEncoding.cursor:
                 let pixels = try await stream.read(width * height * 4)
                 let mask = try await stream.read(((width + 7) / 8) * height)
-                newCursor = RFBCursor(width: width, height: height, hotspotX: x, hotspotY: y, pixels: pixels, mask: mask)
+                if let cursor = RFBCursor(width: width, height: height, hotspotX: x, hotspotY: y, pixels: pixels, mask: mask) {
+                    onMain { $0.cursorChanged(stream: stream, cursor: cursor) }
+                }
             case RFBEncoding.desktopSize:
                 framebuffer.resize(width: width, height: height)
-                screenChanged = true
             default:
                 throw RFBError.unsupportedEncoding(encoding)
             }
         }
 
-        let image = screenChanged ? framebuffer.makeImage() : nil
-        let size = CGSize(width: framebuffer.width, height: framebuffer.height)
-        await client?.publish(stream: stream, image: image, size: size, cursor: newCursor)
-        requestUpdate(incremental: true)
+        publishFrame()
+    }
+
+    /// Shows the latest frame. If the display hasn't caught up with the
+    /// previous one yet, this frame is folded into it rather than queued —
+    /// the screen always shows the newest pixels, never a backlog.
+    private func publishFrame() {
+        guard frameGate.claim() else { return }
+        let stream = self.stream
+        let gate = frameGate
+        onMain { client in
+            gate.release()
+            client.framebufferUpdated(stream: stream)
+        }
     }
 
     private func requestUpdate(incremental: Bool) {
