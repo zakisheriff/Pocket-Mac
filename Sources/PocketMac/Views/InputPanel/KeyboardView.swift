@@ -66,7 +66,8 @@ struct KeyboardView: View {
             flex: flex,
             compactHeight: compactHeight,
             isToggled: isToggled,
-            height: compact ? 30 : 38
+            height: compact ? 30 : 38,
+            repeatsOnHold: id == "delete"
         ) {
             if let action {
                 action()
