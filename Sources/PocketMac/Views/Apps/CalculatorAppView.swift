@@ -63,15 +63,7 @@ struct CalculatorAppView: View {
             awaitingOperand = true
         case "=":
             guard let op = pendingOperator, let rhs = Double(display) else { return }
-            let result: Double
-            switch op {
-            case "÷": result = rhs == 0 ? 0 : accumulator / rhs
-            case "×": result = accumulator * rhs
-            case "−": result = accumulator - rhs
-            case "+": result = accumulator + rhs
-            default: result = rhs
-            }
-            display = formatted(result)
+            display = formatted(CalculatorEngine.apply(op, accumulator, rhs))
             pendingOperator = nil
             awaitingOperand = true
         default: break
@@ -79,10 +71,7 @@ struct CalculatorAppView: View {
     }
 
     private func formatted(_ value: Double) -> String {
-        if value.truncatingRemainder(dividingBy: 1) == 0, abs(value) < 1e15 {
-            return String(Int(value))
-        }
-        return String(format: "%.6g", value)
+        CalculatorEngine.format(value)
     }
 }
 
