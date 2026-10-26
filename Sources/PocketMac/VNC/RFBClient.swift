@@ -67,6 +67,10 @@ final class RFBClient: ObservableObject {
         disconnect(newState: .disconnected)
     }
 
+    func acknowledgeFailure() {
+        if case .failed = state { state = .idle }
+    }
+
     private func disconnect(newState: State) {
         sessionTask?.cancel()
         sessionTask = nil
