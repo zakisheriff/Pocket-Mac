@@ -77,7 +77,6 @@ final class RemoteScreenUIView: UIView, RemoteDisplaySink {
     private let pointerLayer = CALayer()
     private var screenSize: CGSize = .zero
     private var pointer: CGPoint = .zero
-    private var cursor: RFBCursor?
     private var pointerSize: CGFloat = 24
     private var pointerStyle: PointerStyle = .macArrow
     /// Space covered by the keyboard; the Mac screen re-centres above it.
@@ -146,16 +145,40 @@ final class RemoteScreenUIView: UIView, RemoteDisplaySink {
         }
     }
 
-    func frameUpdated() {
+    /// New Mac pixels waiting to be shown on the next screen refresh.
+    private var needsDraw = false
+    private var displayLink: CADisplayLink?
+
+    /// Frames are drawn on the display's own refresh tick (up to 120 Hz),
+    /// never straight from the network: a burst of updates can't pile up
+    /// on the main thread and delay touches.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        displayLink?.invalidate()
+        displayLink = nil
+        guard window != nil else { return }
+        let link = CADisplayLink(target: DisplayLinkTarget(self), selector: #selector(DisplayLinkTarget.tick))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 120)
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    fileprivate func tick() {
+        guard needsDraw else { return }
         if usesMetal {
-            metal?.draw()
+            needsDraw = !(metal?.draw() ?? true)
         } else if let surface {
+            needsDraw = false
             withoutAnimation {
                 screenLayer.contents = RFBFramebuffer.liveImage(
                     of: surface, width: Int(screenSize.width), height: Int(screenSize.height)
                 )
             }
         }
+    }
+
+    func frameUpdated() {
+        needsDraw = true
     }
 
     func pointerMoved(to point: CGPoint) {
@@ -166,17 +189,10 @@ final class RemoteScreenUIView: UIView, RemoteDisplaySink {
         }
     }
 
-    func cursorChanged(_ cursor: RFBCursor?) {
-        self.cursor = cursor
-        withoutAnimation {
-            if let cursor {
-                pointerLayer.contents = cursor.image
-            } else {
-                applyPointerImage()
-            }
-            layoutScreen()
-        }
-    }
+    /// The Mac's own pointer shapes aren't used: macOS sends them
+    /// unreliably (a resize arrow can stick around long after it's gone),
+    /// so the phone always draws the pointer chosen in Settings.
+    func cursorChanged(_ cursor: RFBCursor?) {}
 
     // MARK: Viewport
 
@@ -287,28 +303,15 @@ final class RemoteScreenUIView: UIView, RemoteDisplaySink {
         let scale = pointsPerMacPoint
         let tip = CGPoint(x: frame.minX + pointer.x * scale, y: frame.minY + pointer.y * scale)
         pointerLayer.isHidden = !showsPointer
-        if let cursor {
-            let cursorScale = max(scale, 0.75)
-            pointerLayer.frame = CGRect(
-                x: tip.x - cursor.hotspot.x * cursorScale,
-                y: tip.y - cursor.hotspot.y * cursorScale,
-                width: CGFloat(cursor.image.width) * cursorScale,
-                height: CGFloat(cursor.image.height) * cursorScale
-            )
-        } else {
-            // macOS draws its own arrow into the screen; the ring marks where
-            // the pointer is right now, so the two read as one pointer.
-            let size = PointerImages.size(for: pointerStyle, pointerSize: pointerSize)
-            let hotspot = PointerImages.hotspot(for: pointerStyle)
-            pointerLayer.frame = CGRect(
-                x: tip.x - hotspot.x * size.width, y: tip.y - hotspot.y * size.height,
-                width: size.width, height: size.height
-            )
-        }
+        let size = PointerImages.size(for: pointerStyle, pointerSize: pointerSize)
+        let hotspot = PointerImages.hotspot(for: pointerStyle)
+        pointerLayer.frame = CGRect(
+            x: tip.x - hotspot.x * size.width, y: tip.y - hotspot.y * size.height,
+            width: size.width, height: size.height
+        )
     }
 
     private func applyPointerImage() {
-        guard cursor == nil else { return }
         pointerLayer.contents = PointerImages.image(for: pointerStyle, pointerSize: pointerSize).cgImage
     }
 
@@ -317,6 +320,16 @@ final class RemoteScreenUIView: UIView, RemoteDisplaySink {
         CATransaction.setDisableActions(true)
         body()
         CATransaction.commit()
+    }
+}
+
+/// Holds the view weakly so the display link doesn't keep it alive.
+private final class DisplayLinkTarget: NSObject {
+    weak var view: RemoteScreenUIView?
+    init(_ view: RemoteScreenUIView) { self.view = view }
+    @objc func tick(_ link: CADisplayLink) {
+        guard let view else { return link.invalidate() }
+        view.tick()
     }
 }
 
