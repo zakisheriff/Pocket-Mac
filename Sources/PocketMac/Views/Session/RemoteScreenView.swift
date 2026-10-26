@@ -7,6 +7,7 @@ struct RemoteScreenView: UIViewRepresentable {
     @ObservedObject var client: RFBClient
     var trackpad: TrackpadGestureHandler.Actions?
     var allowsZoom = false
+    var bottomInset: CGFloat = 0
 
     func makeUIView(context: Context) -> RemoteScreenUIView {
         let view = RemoteScreenUIView()
@@ -31,6 +32,7 @@ struct RemoteScreenView: UIViewRepresentable {
             context.coordinator.handler.actions = actions
         }
         view.render(image: client.screen, screenSize: client.screenSize, pointer: client.pointer, cursor: client.cursor)
+        view.setBottomInset(bottomInset)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -66,18 +68,33 @@ final class RemoteScreenUIView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
+    /// Space covered by the keyboard; the Mac screen re-centres above it.
+    private var bottomInset: CGFloat = 0
+
     func render(image: CGImage?, screenSize: CGSize, pointer: CGPoint, cursor: RFBCursor?) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         if let image, (screenLayer.contents as! CGImage?) !== image {
             screenLayer.contents = image
         }
-        if cursor != self.cursor {
-            cursorLayer.contents = cursor?.image
+        if cursor != self.cursor || cursorLayer.contents == nil {
+            cursorLayer.contents = cursor?.image ?? Self.arrowImage
         }
         self.screenSize = screenSize
         self.pointer = pointer
         self.cursor = cursor
+        layoutScreen()
+        CATransaction.commit()
+    }
+
+    /// Slides the Mac screen up or down to make room for the keyboard,
+    /// animated on the GPU so the live view never re-lays out per frame.
+    func setBottomInset(_ inset: CGFloat) {
+        guard inset != bottomInset else { return }
+        bottomInset = inset
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.25)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1))
         layoutScreen()
         CATransaction.commit()
     }
@@ -92,13 +109,21 @@ final class RemoteScreenUIView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         layoutScreen()
+        CATransaction.commit()
+    }
+
+    private var visibleSize: CGSize {
+        CGSize(width: bounds.width, height: max(bounds.height - bottomInset, 1))
     }
 
     /// Mac screen points → view points at the current zoom.
     var pointsPerMacPoint: CGFloat {
         guard screenSize.width > 0, screenSize.height > 0 else { return 1 }
-        return min(bounds.width / screenSize.width, bounds.height / screenSize.height) * zoom
+        let visible = visibleSize
+        return min(visible.width / screenSize.width, visible.height / screenSize.height) * zoom
     }
 
     private func layoutScreen() {
@@ -107,6 +132,7 @@ final class RemoteScreenUIView: UIView {
             cursorLayer.isHidden = true
             return
         }
+        let visible = visibleSize
         let scale = pointsPerMacPoint
         let size = CGSize(width: screenSize.width * scale, height: screenSize.height * scale)
 
@@ -115,27 +141,66 @@ final class RemoteScreenUIView: UIView {
             return min(0, max(available - content, available / 2 - focus * scale))
         }
         let frame = CGRect(
-            x: origin(content: size.width, available: bounds.width, focus: pointer.x),
-            y: origin(content: size.height, available: bounds.height, focus: pointer.y),
+            x: origin(content: size.width, available: visible.width, focus: pointer.x),
+            y: origin(content: size.height, available: visible.height, focus: pointer.y),
             width: size.width,
             height: size.height
         )
         screenLayer.frame = frame
-
-        guard let cursor else {
-            cursorLayer.isHidden = true
-            return
-        }
-        // Keep the pointer readable even when a big Mac screen is shrunk onto a phone.
-        let cursorScale = max(scale, 0.75)
         cursorLayer.isHidden = false
-        cursorLayer.frame = CGRect(
-            x: frame.minX + pointer.x * scale - cursor.hotspot.x * cursorScale,
-            y: frame.minY + pointer.y * scale - cursor.hotspot.y * cursorScale,
-            width: CGFloat(cursor.image.width) * cursorScale,
-            height: CGFloat(cursor.image.height) * cursorScale
-        )
+
+        let tip = CGPoint(x: frame.minX + pointer.x * scale, y: frame.minY + pointer.y * scale)
+        if let cursor {
+            // Keep the Mac's own pointer readable even when the screen is shrunk onto a phone.
+            let cursorScale = max(scale, 0.75)
+            cursorLayer.frame = CGRect(
+                x: tip.x - cursor.hotspot.x * cursorScale,
+                y: tip.y - cursor.hotspot.y * cursorScale,
+                width: CGFloat(cursor.image.width) * cursorScale,
+                height: CGFloat(cursor.image.height) * cursorScale
+            )
+        } else {
+            cursorLayer.frame = CGRect(
+                x: tip.x - Self.arrowHotspot.x, y: tip.y - Self.arrowHotspot.y,
+                width: Self.arrowSize.width, height: Self.arrowSize.height
+            )
+        }
     }
+
+    // MARK: Fallback pointer
+
+    /// macOS Screen Sharing doesn't send its pointer to VNC viewers, so the
+    /// phone draws a Mac-style arrow where the pointer is.
+    private static let arrowSize = CGSize(width: 15, height: 22)
+    private static let arrowHotspot = CGPoint(x: 1.5, y: 1.5)
+
+    private static let arrowImage: CGImage? = {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 3
+        let renderer = UIGraphicsImageRenderer(size: arrowSize, format: format)
+        let image = renderer.image { context in
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: 1.5, y: 1.5))
+            path.addLine(to: CGPoint(x: 1.5, y: 17.5))
+            path.addLine(to: CGPoint(x: 5.4, y: 13.8))
+            path.addLine(to: CGPoint(x: 8.2, y: 20.2))
+            path.addLine(to: CGPoint(x: 10.9, y: 19.0))
+            path.addLine(to: CGPoint(x: 8.2, y: 12.8))
+            path.addLine(to: CGPoint(x: 13.5, y: 12.8))
+            path.close()
+            path.lineJoinStyle = .round
+            context.cgContext.setShadow(offset: CGSize(width: 0, height: 0.6), blur: 1.2, color: UIColor(white: 0, alpha: 0.45).cgColor)
+            UIColor.black.setFill()
+            path.fill()
+            context.cgContext.setShadow(offset: .zero, blur: 0, color: nil)
+            UIColor.white.setStroke()
+            path.lineWidth = 1.3
+            path.stroke()
+            UIColor.black.setFill()
+            path.fill()
+        }
+        return image.cgImage
+    }()
 }
 
 /// The Duo deck's physical-looking trackpad.

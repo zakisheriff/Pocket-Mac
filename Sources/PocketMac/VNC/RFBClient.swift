@@ -105,12 +105,20 @@ final class RFBClient: ObservableObject {
         sendPointer()
     }
 
-    func click(_ button: RFBButtons = .left, count: Int = 1) {
-        for _ in 0..<count {
-            press(button)
-            release(button)
+    /// macOS samples the mouse button state rather than replaying every
+    /// event, so a press released in the same instant can be missed. Hold the
+    /// button briefly, like a real click, and keep modifiers down until after.
+    func click(_ button: RFBButtons = .left, modifiers: Set<ModifierKey> = []) {
+        let ordered = ModifierKey.allCases.filter(modifiers.contains)
+        for modifier in ordered { sendKey(modifier.keysym, down: true) }
+        press(button)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.clickHoldDuration) { [weak self] in
+            self?.release(button)
+            for modifier in ordered.reversed() { self?.sendKey(modifier.keysym, down: false) }
         }
     }
+
+    static let clickHoldDuration: TimeInterval = 0.06
 
     /// Positive `steps` scrolls content up (wheel up), negative scrolls down.
     func scroll(vertical steps: Int, horizontal: Int = 0) {

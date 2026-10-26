@@ -93,10 +93,7 @@ final class SessionInputController: ObservableObject {
     }
 
     private func click(_ button: RFBButtons) {
-        let modifiers = ModifierKey.allCases.filter(activeModifiers.contains)
-        for modifier in modifiers { client.sendKey(modifier.keysym, down: true) }
-        client.click(button)
-        for modifier in modifiers.reversed() { client.sendKey(modifier.keysym, down: false) }
+        client.click(button, modifiers: activeModifiers)
         latched.removeAll()
     }
 
