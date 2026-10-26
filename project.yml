@@ -51,6 +51,12 @@ targets:
         PRODUCT_NAME: Pocket Mac
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+      configs:
+        Debug:
+          # Decoding a live Mac screen is far too slow unoptimised; run
+          # Debug builds at full speed while keeping them testable.
+          SWIFT_OPTIMIZATION_LEVEL: -O
+          ENABLE_TESTABILITY: YES
   Pocket Mac Tests:
     type: bundle.unit-test
     platform: iOS
