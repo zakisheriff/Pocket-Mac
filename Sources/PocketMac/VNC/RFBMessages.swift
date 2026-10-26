@@ -63,6 +63,8 @@ struct RFBPixelFormat: Equatable {
 enum RFBEncoding {
     static let raw: Int32 = 0
     static let copyRect: Int32 = 1
+    static let hextile: Int32 = 5
+    static let zlib: Int32 = 6
     static let zrle: Int32 = 16
     static let cursor: Int32 = -239
     static let desktopSize: Int32 = -223
