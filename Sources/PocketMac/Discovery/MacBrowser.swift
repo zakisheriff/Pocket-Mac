@@ -14,8 +14,11 @@ final class MacBrowser: ObservableObject {
 
     @Published private(set) var macs: [DiscoveredMac] = []
     @Published private(set) var isLocalNetworkDenied = false
+    /// True for the first few seconds of a search, while new Macs usually appear.
+    @Published private(set) var isScanning = false
 
     private var browser: NWBrowser?
+    private var scanTask: Task<Void, Never>?
 
     func start() {
         guard browser == nil else { return }
@@ -45,10 +48,29 @@ final class MacBrowser: ObservableObject {
 
         browser.start(queue: .main)
         self.browser = browser
+        markScanning()
     }
 
     func stop() {
         browser?.cancel()
         browser = nil
+    }
+
+    /// Starts a fresh search, as if the app had just opened.
+    func refresh() async {
+        stop()
+        macs = []
+        start()
+        try? await Task.sleep(for: .seconds(2))
+    }
+
+    private func markScanning() {
+        isScanning = true
+        scanTask?.cancel()
+        scanTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            self?.isScanning = false
+        }
     }
 }
