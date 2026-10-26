@@ -10,9 +10,12 @@ enum RFBError: LocalizedError, Equatable {
     case serverRefused(String)
     case protocolViolation(String)
     case unsupportedEncoding(Int32)
+    case screenNeverArrived
 
     var errorDescription: String? {
         switch self {
+        case .screenNeverArrived:
+            return "Your Mac logged you in but didn't send its screen — it's usually still holding on to an earlier session. Tap Try Again. If it still won't show, turn Screen Sharing off and on in System Settings › General › Sharing on the Mac."
         case .connectionClosed:
             return "The Mac closed the connection."
         case .connectionFailed(let reason):
@@ -115,6 +118,9 @@ actor RFBStream {
         tcp.connectionTimeout = 6
         tcp.enableKeepalive = true
         let parameters = NWParameters(tls: nil, tcp: tcp)
+        // Marks the traffic as interactive video, so Wi‑Fi sends it ahead of
+        // background traffic and the phone's radio stays responsive.
+        parameters.serviceClass = .interactiveVideo
         if wifiOnly { parameters.requiredInterfaceType = .wifi }
         return NWConnection(to: endpoint, using: parameters)
     }
