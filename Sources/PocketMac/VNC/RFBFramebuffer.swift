@@ -111,9 +111,12 @@ final class RFBFramebuffer {
     }
 
     /// A CGImage that reads straight from the surface's memory — no copy.
-    /// Core Animation uploads it to the GPU once when it's displayed.
     func makeLiveImage() -> CGImage? {
-        guard let surface, width > 0, height > 0 else { return nil }
+        surface.flatMap { Self.liveImage(of: $0, width: width, height: height) }
+    }
+
+    static func liveImage(of surface: IOSurface, width: Int, height: Int) -> CGImage? {
+        guard width > 0, height > 0 else { return nil }
         let retained = Unmanaged.passRetained(surface)
         guard let provider = CGDataProvider(
             dataInfo: retained.toOpaque(),
