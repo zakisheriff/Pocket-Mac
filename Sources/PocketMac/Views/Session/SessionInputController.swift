@@ -81,6 +81,8 @@ final class SessionInputController: ObservableObject {
         actions.click = { [weak self] in self?.click(.left) }
         actions.rightClick = { [weak self] in self?.click(.right) }
         actions.scroll = { [weak self] delta in self?.scroll(delta) }
+        actions.swipe = { [weak self] delta in self?.scroll(delta) }
+        actions.point = { [weak self] point in self?.client.movePointer(to: point) }
         actions.dragBegan = { [weak self] in self?.client.press(.left) }
         actions.dragEnded = { [weak self] in self?.client.release(.left) }
         return actions
