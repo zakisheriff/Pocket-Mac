@@ -25,6 +25,12 @@ final class FakeRFBServer {
     let port: UInt16
     /// How the screen is sent: raw, hextile or zlib.
     var screenEncoding: Int32 = RFBEncoding.raw
+    /// Send a frame for every update request (a live, changing screen)
+    /// instead of only the first.
+    var answersEveryRequest = false
+    /// Silently ignore this many update requests, like macOS does when one
+    /// arrives while it's busy sending.
+    var requestsToDrop = 0
     private let listenSocket: Int32
     private let login: Login
     private let width: Int
@@ -35,12 +41,14 @@ final class FakeRFBServer {
     private var _keyEvents: [KeyEvent] = []
     private var _requestedEncodings: [Int32] = []
     private var _updateRequests = 0
+    private var _framesSent = 0
     private var _pointerTimes: [Date] = []
 
     var pointerEvents: [PointerEvent] { lock.withLock { _pointerEvents } }
     var keyEvents: [KeyEvent] { lock.withLock { _keyEvents } }
     var requestedEncodings: [Int32] { lock.withLock { _requestedEncodings } }
     var updateRequests: Int { lock.withLock { _updateRequests } }
+    var framesSent: Int { lock.withLock { _framesSent } }
     var pointerTimes: [Date] { lock.withLock { _pointerTimes } }
 
     init(login: Login, width: Int, height: Int, pixels: [UInt32]) throws {
@@ -164,9 +172,14 @@ final class FakeRFBServer {
             case 3:
                 guard read(fd, 9) != nil else { return }
                 lock.withLock { _updateRequests += 1 }
-                if !sentScreen {
+                if sentScreen && requestsToDrop > 0 {
+                    requestsToDrop -= 1
+                    continue
+                }
+                if !sentScreen || answersEveryRequest {
                     sentScreen = true
                     send(fd, rawScreenUpdate())
+                    lock.withLock { _framesSent += 1 }
                 }
             case 4:
                 guard let body = read(fd, 7) else { return }

@@ -84,6 +84,25 @@ final class RFBClientIntegrationTests: XCTestCase {
         XCTAssertEqual(client.state, .disconnected)
     }
 
+    /// macOS can drop an update request (one arriving mid-send). The stream
+    /// must recover instead of freezing on the last frame.
+    func testDroppedUpdateRequestDoesNotFreezeTheScreen() async throws {
+        let server = try FakeRFBServer(login: .vncPassword("pw123456"), width: 3, height: 2, pixels: screenPixels)
+        server.answersEveryRequest = true
+        server.requestsToDrop = 1
+        server.start()
+        let client = RFBClient()
+        client.connect(request(port: server.port, username: "", password: "pw123456"))
+
+        do {
+            try await waitUntil(timeout: 4) { server.framesSent >= 4 }
+        } catch {
+            XCTFail("screen froze after a dropped request: only \(server.framesSent) frames sent")
+            return
+        }
+        client.disconnect()
+    }
+
     func testHextileAndZlibScreensDecodeExactly() async throws {
         for encoding in [RFBEncoding.hextile, RFBEncoding.zlib] {
             let server = try FakeRFBServer(login: .vncPassword("pw123456"), width: 3, height: 2, pixels: screenPixels)
