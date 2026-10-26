@@ -50,27 +50,29 @@ struct ConnectView: View {
                     }
                 }
 
-                Section {
-                    ForEach(unsavedNearbyMacs) { mac in
-                        Button {
-                            HapticsManager.tap()
-                            loginTarget = .discovered(mac)
-                        } label: {
-                            MacRow(name: mac.name, subtitle: "On this network", isOnline: true)
+                if !unsavedNearbyMacs.isEmpty || browser.macs.isEmpty || browser.isLocalNetworkDenied {
+                    Section {
+                        ForEach(unsavedNearbyMacs) { mac in
+                            Button {
+                                HapticsManager.tap()
+                                loginTarget = .discovered(mac)
+                            } label: {
+                                MacRow(name: mac.name, subtitle: "On this network", isOnline: true)
+                            }
                         }
-                    }
-                    if browser.macs.isEmpty {
-                        HStack(spacing: 12) {
-                            ProgressView()
-                            Text("Looking for Macs with Screen Sharing on…")
-                                .foregroundStyle(.secondary)
+                        if browser.macs.isEmpty && !browser.isLocalNetworkDenied {
+                            HStack(spacing: 12) {
+                                ProgressView()
+                                Text("Looking for Macs with Screen Sharing on…")
+                                    .foregroundStyle(.secondary)
+                            }
                         }
-                    }
-                } header: {
-                    Text("On this network")
-                } footer: {
-                    if browser.isLocalNetworkDenied {
-                        Text("Pocket Mac can't see your network. Turn on Settings › Privacy & Security › Local Network › Pocket Mac.")
+                    } header: {
+                        Text("On this network")
+                    } footer: {
+                        if browser.isLocalNetworkDenied {
+                            Text("Pocket Mac can't see your network. Turn on Settings › Privacy & Security › Local Network › Pocket Mac.")
+                        }
                     }
                 }
 
