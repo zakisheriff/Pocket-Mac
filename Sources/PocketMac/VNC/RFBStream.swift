@@ -16,7 +16,7 @@ enum RFBError: LocalizedError, Equatable {
         case .connectionClosed:
             return "The Mac closed the connection."
         case .connectionFailed(let reason):
-            return "Couldn't reach the Mac. Make sure Screen Sharing is on and both devices are on the same Wi‑Fi. (\(reason))"
+            return "Couldn't reach your Mac. Check that it's awake with Screen Sharing on, that both are on the same Wi‑Fi, and that Local Network is allowed for Pocket Mac in Settings › Privacy & Security. (\(reason))"
         case .unsupportedVersion(let version):
             return "This Mac speaks an unsupported Screen Sharing version (\(version))."
         case .noSupportedSecurityType(let types):
@@ -41,52 +41,102 @@ enum RFBError: LocalizedError, Equatable {
 /// can be sent from the main thread while a large screen update is still
 /// being read.
 actor RFBStream {
-    private let connection: NWConnection
+    /// Ways to reach the Mac, tried in order (e.g. Bonjour, then its last
+    /// known Wi‑Fi address).
+    private let endpoints: [NWEndpoint]
+    private let attemptTimeout: TimeInterval
+    private let current = ConnectionBox()
     private let queue = DispatchQueue(label: "com.zakisheriff.pocketmac.rfb", qos: .userInteractive)
     private var buffer = Data()
     private var readOffset = 0
 
-    init(endpoint: NWEndpoint) {
-        let tcp = NWProtocolTCP.Options()
-        tcp.noDelay = true
-        tcp.connectionTimeout = 10
-        tcp.enableKeepalive = true
-        connection = NWConnection(to: endpoint, using: NWParameters(tls: nil, tcp: tcp))
+    init(endpoints: [NWEndpoint], attemptTimeout: TimeInterval = 6) {
+        precondition(!endpoints.isEmpty, "need at least one way to reach the Mac")
+        self.endpoints = endpoints
+        self.attemptTimeout = attemptTimeout
     }
 
+    init(endpoint: NWEndpoint) {
+        self.init(endpoints: [endpoint])
+    }
+
+    /// Connects using the first route that works. Each route gets its own
+    /// time limit, so one that never answers (a Bonjour name resolving to an
+    /// interface that doesn't route) can't leave the app spinning forever.
     func open() async throws {
-        let connection = self.connection
-        let queue = self.queue
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            var resumed = false
-            func finish(_ result: Result<Void, Error>) {
-                guard !resumed else { return }
-                resumed = true
-                continuation.resume(with: result)
+        var lastError: Error = RFBError.connectionFailed("timed out")
+        for (endpoint, wifiOnly) in attempts {
+            try Task.checkCancellation()
+            let connection = Self.makeConnection(to: endpoint, wifiOnly: wifiOnly)
+            do {
+                try await Self.start(connection, on: queue, timeout: attemptTimeout)
+                current.set(connection)
+                return
+            } catch {
+                connection.cancel()
+                lastError = error
             }
-            connection.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    finish(.success(()))
-                case .failed(let error), .waiting(let error):
-                    finish(.failure(RFBError.connectionFailed(error.localizedDescription)))
-                    connection.cancel()
-                case .cancelled:
-                    finish(.failure(RFBError.connectionClosed))
-                default:
-                    break
-                }
-            }
-            connection.start(queue: queue)
+        }
+        throw lastError
+    }
+
+    /// Bonjour names are tried as-is and then pinned to Wi‑Fi, in case the
+    /// system picked an interface (like a cable link) that doesn't route.
+    private var attempts: [(NWEndpoint, Bool)] {
+        endpoints.flatMap { endpoint -> [(NWEndpoint, Bool)] in
+            if case .service = endpoint { return [(endpoint, false), (endpoint, true)] }
+            return [(endpoint, false)]
+        }
+    }
+
+    /// The address that actually answered, so it can be tried directly next time.
+    nonisolated var reachedAddress: (host: String, port: UInt16)? {
+        guard case .hostPort(let host, let port) = current.get()?.currentPath?.remoteEndpoint else { return nil }
+        switch host {
+        case .ipv4(let address): return ("\(address)", port.rawValue)
+        case .name(let name, _): return (name, port.rawValue)
+        default: return nil
         }
     }
 
     nonisolated func close() {
-        connection.cancel()
+        current.get()?.cancel()
     }
 
     nonisolated func enqueue(_ data: Data) {
-        connection.send(content: data, completion: .idempotent)
+        current.get()?.send(content: data, completion: .idempotent)
+    }
+
+    private static func makeConnection(to endpoint: NWEndpoint, wifiOnly: Bool) -> NWConnection {
+        let tcp = NWProtocolTCP.Options()
+        tcp.noDelay = true
+        tcp.connectionTimeout = 6
+        tcp.enableKeepalive = true
+        let parameters = NWParameters(tls: nil, tcp: tcp)
+        if wifiOnly { parameters.requiredInterfaceType = .wifi }
+        return NWConnection(to: endpoint, using: parameters)
+    }
+
+    private static func start(_ connection: NWConnection, on queue: DispatchQueue, timeout: TimeInterval) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let once = ResumeOnce(continuation)
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    once.resume(.success(()))
+                case .failed(let error), .waiting(let error):
+                    once.resume(.failure(RFBError.connectionFailed(error.localizedDescription)))
+                case .cancelled:
+                    once.resume(.failure(RFBError.connectionClosed))
+                default:
+                    break
+                }
+            }
+            queue.asyncAfter(deadline: .now() + timeout) {
+                once.resume(.failure(RFBError.connectionFailed("timed out")))
+            }
+            connection.start(queue: queue)
+        }
     }
 
     func read(_ count: Int) async throws -> Data {
@@ -123,7 +173,7 @@ actor RFBStream {
     }
 
     private func receive(maximum: Int) async throws -> Data {
-        let connection = self.connection
+        guard let connection = current.get() else { throw RFBError.connectionClosed }
         return try await withCheckedThrowingContinuation { continuation in
             connection.receive(minimumIncompleteLength: 1, maximumLength: maximum) { data, _, isComplete, error in
                 if let error {
@@ -137,6 +187,32 @@ actor RFBStream {
                 }
             }
         }
+    }
+}
+
+/// The live connection, readable from any thread (input is sent off the actor).
+private final class ConnectionBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var connection: NWConnection?
+
+    func set(_ connection: NWConnection) { lock.withLock { self.connection = connection } }
+    func get() -> NWConnection? { lock.withLock { connection } }
+}
+
+/// Resumes a continuation exactly once, whichever of ready / failure /
+/// timeout happens first.
+private final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+
+    init(_ continuation: CheckedContinuation<Void, Error>) { self.continuation = continuation }
+
+    func resume(_ result: Result<Void, Error>) {
+        let pending: CheckedContinuation<Void, Error>? = lock.withLock {
+            defer { continuation = nil }
+            return continuation
+        }
+        pending?.resume(with: result)
     }
 }
 
