@@ -26,6 +26,9 @@ struct DirectModeView: View {
                 .onChange(of: proxy.size) { _, newSize in
                     floatingCursor.setBounds(CGRect(origin: .zero, size: newSize))
                 }
+                .onChange(of: settings.pointerSensitivity, initial: true) { _, value in
+                    floatingCursor.sensitivity = CGFloat(value)
+                }
 
                 if settings.trackpadOverlayEnabled {
                     FloatingTrackpad(cursor: floatingCursor, windowManager: windowManager, center: $floatingPadCenter)
