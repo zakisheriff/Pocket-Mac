@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 import IOSurface
 import Network
+import OSLog
 import UIKit
 
 /// Where and how to log in to a Mac.
@@ -34,8 +35,10 @@ struct MacConnectionRequest {
 /// frames and pointer movement never wait on a view re-render.
 @MainActor
 protocol RemoteDisplaySink: AnyObject {
-    /// A new frame. The image reads the live framebuffer without copying.
-    func display(image: CGImage?, size: CGSize)
+    /// The framebuffer to show (a new one after connecting or a resize).
+    func display(surface: IOSurface?, size: CGSize)
+    /// The framebuffer's pixels changed; redraw.
+    func frameUpdated()
     func pointerMoved(to point: CGPoint)
     func cursorChanged(_ cursor: RFBCursor?)
 }
@@ -75,7 +78,8 @@ final class RFBClient: ObservableObject {
     func addDisplay(_ sink: RemoteDisplaySink) {
         guard !displays.contains(sink) else { return }
         displays.add(sink)
-        sink.display(image: framebuffer?.makeLiveImage(), size: screenSize)
+        sink.display(surface: framebuffer?.surface, size: screenSize)
+        if hasScreen { sink.frameUpdated() }
         sink.cursorChanged(cursor)
         sink.pointerMoved(to: pointer)
     }
@@ -115,7 +119,7 @@ final class RFBClient: ObservableObject {
         cursor = nil
         framebuffer = nil
         for sink in sinks {
-            sink.display(image: nil, size: .zero)
+            sink.display(surface: nil, size: .zero)
             sink.cursorChanged(nil)
         }
 
@@ -248,10 +252,11 @@ final class RFBClient: ObservableObject {
         guard stream === self.stream else { return }
         desktopName = name
         self.framebuffer = framebuffer
+        shownSurface = framebuffer.surface
         screenSize = CGSize(width: framebuffer.width, height: framebuffer.height)
         pointer = CGPoint(x: screenSize.width / 2, y: screenSize.height / 2)
         for sink in sinks {
-            sink.display(image: nil, size: screenSize)
+            sink.display(surface: framebuffer.surface, size: screenSize)
             sink.pointerMoved(to: pointer)
         }
         state = .connected
@@ -260,14 +265,21 @@ final class RFBClient: ObservableObject {
     fileprivate func framebufferUpdated(stream: RFBStream) {
         guard stream === self.stream, let framebuffer else { return }
         let size = CGSize(width: framebuffer.width, height: framebuffer.height)
+        let surfaceChanged = framebuffer.surface !== shownSurface
         if size != screenSize {
             screenSize = size
             movePointer(to: pointer)
         }
+        if surfaceChanged {
+            shownSurface = framebuffer.surface
+            for sink in sinks { sink.display(surface: framebuffer.surface, size: size) }
+        }
         if !hasScreen { hasScreen = true }
-        let image = framebuffer.makeLiveImage()
-        for sink in sinks { sink.display(image: image, size: size) }
+        for sink in sinks { sink.frameUpdated() }
     }
+
+    /// The surface the displays were last given (it changes on resize).
+    private var shownSurface: IOSurface?
 
     fileprivate func cursorChanged(stream: RFBStream, cursor newCursor: RFBCursor) {
         guard stream === self.stream else { return }
@@ -285,6 +297,54 @@ final class RFBClient: ObservableObject {
         stream.close()
         self.stream = nil
         state = newState
+    }
+}
+
+/// Prints how the session is performing to the Xcode console every couple of
+/// seconds: frames per second, data rate and which screen formats the Mac
+/// chose — the numbers needed to tell where any lag comes from.
+private struct SessionStats {
+    private static let log = Logger(subsystem: "com.zakisheriff.pocketmac", category: "session")
+    var screenSize = ""
+    private var frames = 0
+    private var bytes = 0
+    private var bytesByEncoding: [Int32: Int] = [:]
+    private var windowStart = Date()
+
+    mutating func record(encoding: Int32, bytes count: Int) {
+        bytes += count
+        bytesByEncoding[encoding, default: 0] += count
+    }
+
+    mutating func frameDone() {
+        frames += 1
+        let elapsed = Date().timeIntervalSince(windowStart)
+        guard elapsed >= 2 else { return }
+        let fps = Double(frames) / elapsed
+        let rate = Double(bytes) / elapsed / 1_048_576
+        let mix = bytesByEncoding.sorted { $0.value > $1.value }.map { encoding, count in
+            "\(Self.name(encoding)) \(bytes > 0 ? count * 100 / bytes : 0)%"
+        }.joined(separator: ", ")
+        let line = String(format: "Pocket Mac: %.1f fps · %.2f MB/s · screen %@ · %@", fps, rate, screenSize, mix)
+        Self.log.notice("\(line, privacy: .public)")
+        print(line)
+        frames = 0
+        bytes = 0
+        bytesByEncoding = [:]
+        windowStart = Date()
+    }
+
+    private static func name(_ encoding: Int32) -> String {
+        switch encoding {
+        case RFBEncoding.raw: return "raw"
+        case RFBEncoding.copyRect: return "copyrect"
+        case RFBEncoding.hextile: return "hextile"
+        case RFBEncoding.zlib: return "zlib"
+        case RFBEncoding.zrle: return "zrle"
+        case RFBEncoding.cursor: return "cursor"
+        case RFBEncoding.desktopSize: return "resize"
+        default: return "enc \(encoding)"
+        }
     }
 }
 
@@ -313,7 +373,9 @@ private final class RFBSession {
     private weak var client: RFBClient?
     private var framebuffer = RFBFramebuffer(width: 0, height: 0)
     private let zrle = ZRLEDecoder()
+    private let zlibRects = ZlibRectDecoder()
     private let frameGate = FrameGate()
+    private var stats = SessionStats()
 
     init(stream: RFBStream, request: MacConnectionRequest, client: RFBClient?) {
         self.stream = stream
@@ -354,10 +416,13 @@ private final class RFBSession {
         let framebuffer = RFBFramebuffer(width: width, height: height)
         self.framebuffer = framebuffer
         stream.enqueue(RFBClientMessage.setPixelFormat(.bgrx))
+        // Most compact first; the Mac picks the first one it supports.
         stream.enqueue(RFBClientMessage.setEncodings([
-            RFBEncoding.zrle, RFBEncoding.copyRect, RFBEncoding.raw,
+            RFBEncoding.zrle, RFBEncoding.zlib, RFBEncoding.hextile,
+            RFBEncoding.copyRect, RFBEncoding.raw,
             RFBEncoding.cursor, RFBEncoding.desktopSize,
         ]))
+        stats.screenSize = "\(width)x\(height)"
         requestUpdate(incremental: false)
         let displayName = name.isEmpty ? request.displayName : name
         onMain { $0.sessionStarted(stream: stream, name: displayName, framebuffer: framebuffer) }
@@ -481,6 +546,7 @@ private final class RFBSession {
             let width = Int(try await stream.readU16())
             let height = Int(try await stream.readU16())
             let encoding = try await stream.readS32()
+            let bytesBefore = await stream.totalBytesRead
 
             switch encoding {
             case RFBEncoding.raw:
@@ -494,6 +560,12 @@ private final class RFBSession {
                 let length = Int(try await stream.readU32())
                 let compressed = try await stream.read(length)
                 try zrle.decode(x: x, y: y, width: width, height: height, compressed: compressed, into: framebuffer)
+            case RFBEncoding.zlib:
+                let length = Int(try await stream.readU32())
+                let compressed = try await stream.read(length)
+                try zlibRects.decode(x: x, y: y, width: width, height: height, compressed: compressed, into: framebuffer)
+            case RFBEncoding.hextile:
+                try await HextileDecoder.decode(x: x, y: y, width: width, height: height, from: stream, into: framebuffer)
             case RFBEncoding.cursor:
                 let pixels = try await stream.read(width * height * 4)
                 let mask = try await stream.read(((width + 7) / 8) * height)
@@ -505,8 +577,10 @@ private final class RFBSession {
             default:
                 throw RFBError.unsupportedEncoding(encoding)
             }
+            stats.record(encoding: encoding, bytes: await stream.totalBytesRead - bytesBefore)
         }
 
+        stats.frameDone()
         publishFrame()
     }
 

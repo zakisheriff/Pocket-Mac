@@ -49,6 +49,8 @@ actor RFBStream {
     private let queue = DispatchQueue(label: "com.zakisheriff.pocketmac.rfb", qos: .userInteractive)
     private var buffer = Data()
     private var readOffset = 0
+    /// Every byte read so far, for the session's throughput stats.
+    private(set) var totalBytesRead = 0
 
     init(endpoints: [NWEndpoint], attemptTimeout: TimeInterval = 6) {
         precondition(!endpoints.isEmpty, "need at least one way to reach the Mac")
@@ -149,6 +151,7 @@ actor RFBStream {
         let start = buffer.startIndex + readOffset
         let result = buffer.subdata(in: start..<(start + count))
         readOffset += count
+        totalBytesRead += count
         if readOffset > 1 << 20 || readOffset == buffer.count {
             buffer.removeSubrange(buffer.startIndex..<(buffer.startIndex + readOffset))
             readOffset = 0
