@@ -43,7 +43,7 @@ struct ConnectView: View {
                 }
                 .scrollBounceBehavior(.basedOnSize)
             }
-            .background { BackdropGradient().ignoresSafeArea() }
+            .background(Color(.systemGroupedBackground).ignoresSafeArea())
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -78,13 +78,8 @@ struct ConnectView: View {
                 .font(.system(size: 64, weight: .ultraLight))
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(.primary)
-            VStack(spacing: 6) {
-                Text("Pocket Mac")
-                    .font(.system(size: 34, weight: .bold))
-                Text("Your Mac, in your hand.")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-            }
+            Text("Pocket Mac")
+                .font(.system(size: 34, weight: .bold))
         }
         .multilineTextAlignment(.center)
     }
@@ -325,40 +320,5 @@ private struct SetupGuideSheet: View {
             }
         }
         .presentationDetents([.medium])
-    }
-}
-
-// MARK: - Backdrop
-
-/// A soft, wallpaper-like gradient for the glass to sit on.
-private struct BackdropGradient: View {
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        MeshGradient(
-            width: 3, height: 3,
-            points: [
-                [0, 0], [0.5, 0], [1, 0],
-                [0, 0.5], [0.6, 0.45], [1, 0.5],
-                [0, 1], [0.5, 1], [1, 1],
-            ],
-            colors: colorScheme == .dark ? darkColors : lightColors
-        )
-    }
-
-    private var lightColors: [Color] {
-        [
-            Color(red: 0.93, green: 0.95, blue: 1.00), Color(red: 0.88, green: 0.92, blue: 1.00), Color(red: 0.95, green: 0.91, blue: 0.99),
-            Color(red: 0.90, green: 0.95, blue: 0.99), Color(red: 0.97, green: 0.97, blue: 0.99), Color(red: 0.92, green: 0.90, blue: 0.99),
-            Color(red: 0.96, green: 0.96, blue: 0.98), Color(red: 0.93, green: 0.94, blue: 0.99), Color(red: 0.97, green: 0.95, blue: 0.97),
-        ]
-    }
-
-    private var darkColors: [Color] {
-        [
-            Color(red: 0.05, green: 0.07, blue: 0.16), Color(red: 0.07, green: 0.10, blue: 0.24), Color(red: 0.13, green: 0.07, blue: 0.22),
-            Color(red: 0.04, green: 0.09, blue: 0.18), Color(red: 0.06, green: 0.06, blue: 0.10), Color(red: 0.10, green: 0.06, blue: 0.18),
-            Color(red: 0.03, green: 0.04, blue: 0.08), Color(red: 0.05, green: 0.06, blue: 0.12), Color(red: 0.07, green: 0.05, blue: 0.10),
-        ]
     }
 }
