@@ -26,6 +26,10 @@ final class MetalScreenRenderer {
         layer.minificationFilter = .linear
         layer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
         layer.maximumDrawableCount = 3
+        // Never stall the main thread (and with it, touch input) waiting
+        // for a drawable: skip the frame and draw the next tick instead.
+        layer.allowsNextDrawableTimeout = true
+        layer.presentsWithTransaction = false
         layer.backgroundColor = CGColor(gray: 0, alpha: 1)
     }
 
@@ -50,11 +54,18 @@ final class MetalScreenRenderer {
         return true
     }
 
-    func draw() {
-        guard let texture,
-              let drawable = layer.nextDrawable(),
+    /// Frames on the GPU not yet shown; one is enough, more only adds delay.
+    private var inFlight = 0
+
+    /// Returns false if the frame was skipped (the GPU is still busy with
+    /// the last one), so the caller can try again next screen refresh.
+    @discardableResult
+    func draw() -> Bool {
+        guard let texture else { return true }
+        guard inFlight == 0 else { return false }
+        guard let drawable = layer.nextDrawable(),
               let commands = queue.makeCommandBuffer(),
-              let blit = commands.makeBlitCommandEncoder() else { return }
+              let blit = commands.makeBlitCommandEncoder() else { return false }
         blit.copy(
             from: texture, sourceSlice: 0, sourceLevel: 0,
             sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
@@ -64,6 +75,11 @@ final class MetalScreenRenderer {
         )
         blit.endEncoding()
         commands.present(drawable)
+        inFlight += 1
+        commands.addCompletedHandler { [weak self] _ in
+            DispatchQueue.main.async { self?.inFlight -= 1 }
+        }
         commands.commit()
+        return true
     }
 }
