@@ -19,10 +19,8 @@ struct ConnectView: View {
     @ObservedObject var client: RFBClient
     @ObservedObject var browser: MacBrowser
     @ObservedObject var savedMacs: SavedMacStore
-    @ObservedObject var settings: SettingsStore
 
     @State private var loginTarget: LoginTarget?
-    @State private var showingSettings = false
     @State private var showingSetupGuide = false
 
     var body: some View {
@@ -41,27 +39,13 @@ struct ConnectView: View {
                     .padding(.bottom, 12)
                     .frame(minHeight: proxy.size.height)
                 }
-                .scrollBounceBehavior(.basedOnSize)
+                .refreshable { await browser.refresh() }
             }
             .background(Color(.systemGroupedBackground).ignoresSafeArea())
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        HapticsManager.tap()
-                        showingSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .accessibilityLabel("Settings")
-                }
-            }
             .sheet(item: $loginTarget) { target in
                 LoginSheet(target: target, savedMacs: savedMacs) { request in
                     client.connect(request)
                 }
-            }
-            .sheet(isPresented: $showingSettings) {
-                SettingsSheet(settings: settings)
             }
             .sheet(isPresented: $showingSetupGuide) {
                 SetupGuideSheet()
@@ -86,31 +70,65 @@ struct ConnectView: View {
 
     private var macs: some View {
         GlassEffectContainer(spacing: 12) {
-            VStack(spacing: 12) {
-                ForEach(savedMacs.macs) { mac in
-                    MacCard(name: mac.name, status: status(for: mac)) {
-                        connect(to: mac)
-                    }
-                    .contextMenu {
-                        Button("Edit Login", systemImage: "person.badge.key") {
-                            HapticsManager.tap()
-                            loginTarget = .saved(mac)
-                        }
-                        Button("Forget This Mac", systemImage: "trash", role: .destructive) {
-                            HapticsManager.appOpen()
-                            savedMacs.remove(mac)
+            VStack(alignment: .leading, spacing: 24) {
+                if !savedMacs.macs.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        SectionLabel(title: "My Macs")
+                        ForEach(savedMacs.macs) { mac in
+                            MacCard(name: mac.name, status: status(for: mac)) {
+                                connect(to: mac)
+                            }
+                            .contextMenu {
+                                Button("Edit Login", systemImage: "person.badge.key") {
+                                    HapticsManager.tap()
+                                    loginTarget = .saved(mac)
+                                }
+                                Button("Forget This Mac", systemImage: "trash", role: .destructive) {
+                                    HapticsManager.appOpen()
+                                    savedMacs.remove(mac)
+                                }
+                            }
                         }
                     }
                 }
 
-                ForEach(unsavedNearbyMacs) { mac in
-                    MacCard(name: mac.name, status: .available) {
-                        loginTarget = .discovered(mac)
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        SectionLabel(title: "Nearby")
+                        Spacer()
+                        if browser.isScanning {
+                            ProgressView()
+                                .controlSize(.small)
+                                .padding(.trailing, 6)
+                        } else {
+                            Button {
+                                HapticsManager.tap()
+                                Task { await browser.refresh() }
+                            } label: {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.footnote.weight(.semibold))
+                            }
+                            .buttonStyle(.glass)
+                            .buttonBorderShape(.circle)
+                            .controlSize(.small)
+                            .accessibilityLabel("Search again")
+                        }
                     }
-                }
+                    .frame(height: 28)
 
-                if browser.macs.isEmpty && savedMacs.macs.isEmpty {
-                    SearchingCard(isDenied: browser.isLocalNetworkDenied)
+                    ForEach(unsavedNearbyMacs) { mac in
+                        MacCard(name: mac.name, status: .available) {
+                            loginTarget = .discovered(mac)
+                        }
+                    }
+
+                    if unsavedNearbyMacs.isEmpty {
+                        SearchingCard(
+                            isDenied: browser.isLocalNetworkDenied,
+                            isScanning: browser.isScanning,
+                            hasSavedMacs: !savedMacs.macs.isEmpty
+                        )
+                    }
                 }
             }
         }
@@ -243,25 +261,46 @@ private struct MacCard: View {
 
 private struct SearchingCard: View {
     let isDenied: Bool
+    let isScanning: Bool
+    let hasSavedMacs: Bool
 
     var body: some View {
         HStack(spacing: 14) {
             if isDenied {
                 Image(systemName: "wifi.exclamationmark")
-                    .font(.title2)
+                    .font(.title3)
                     .foregroundStyle(.orange)
-            } else {
+            } else if isScanning {
                 ProgressView()
+            } else {
+                Image(systemName: "magnifyingglass")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
             }
-            Text(isDenied
-                 ? "Allow Local Network for Pocket Mac in Settings › Privacy & Security."
-                 : "Looking for Macs nearby…")
+            Text(message)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 0)
         }
         .padding(20)
         .glassEffect(.regular, in: .rect(cornerRadius: 28))
+    }
+
+    private var message: String {
+        if isDenied { return "Allow Local Network for Pocket Mac in Settings › Privacy & Security." }
+        if isScanning { return "Looking for Macs nearby…" }
+        return hasSavedMacs ? "No other Macs found. Pull down to search again." : "No Macs found yet. Turn on Screen Sharing on your Mac."
+    }
+}
+
+private struct SectionLabel: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.leading, 6)
     }
 }
 

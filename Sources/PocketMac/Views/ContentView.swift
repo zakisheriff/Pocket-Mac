@@ -7,7 +7,7 @@ struct ContentView: View {
     @StateObject private var savedMacs = SavedMacStore()
 
     var body: some View {
-        ConnectView(client: client, browser: browser, savedMacs: savedMacs, settings: settings)
+        ConnectView(client: client, browser: browser, savedMacs: savedMacs)
             .fullScreenCover(isPresented: sessionIsShowing) {
                 SessionView(client: client, settings: settings)
             }
