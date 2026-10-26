@@ -134,7 +134,9 @@ struct SessionView: View {
 
     @ViewBuilder
     private var statusOverlay: some View {
-        if let message = statusMessage {
+        if case .failed(let message) = client.state {
+            failureCard(message)
+        } else if let message = statusMessage {
             VStack(spacing: 14) {
                 ProgressView()
                     .controlSize(.large)
@@ -151,6 +153,39 @@ struct SessionView: View {
             .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
             .padding(32)
         }
+    }
+
+    private func failureCard(_ message: String) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 34))
+                .foregroundStyle(.orange)
+            Text("Couldn't Connect")
+                .font(.headline)
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            GlassEffectContainer(spacing: 10) {
+                HStack(spacing: 10) {
+                    Button("Close") {
+                        HapticsManager.tap()
+                        client.acknowledgeFailure()
+                    }
+                    .buttonStyle(.glass)
+                    Button("Try Again") {
+                        HapticsManager.appOpen()
+                        client.retry()
+                    }
+                    .buttonStyle(.glassProminent)
+                }
+                .controlSize(.large)
+            }
+        }
+        .padding(28)
+        .frame(maxWidth: 360)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .padding(24)
     }
 
     private var statusMessage: String? {

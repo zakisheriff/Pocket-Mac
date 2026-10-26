@@ -92,7 +92,22 @@ final class RFBClient: ObservableObject {
         state == .connecting || state == .authenticating || state == .connected
     }
 
+    /// The session screen stays up for failures too, so the error can be
+    /// read and retried instead of flashing past as the screen closes.
+    var showsSession: Bool {
+        if case .failed = state { return true }
+        return isActive
+    }
+
+    private var lastRequest: MacConnectionRequest?
+
+    func retry() {
+        guard let lastRequest else { return }
+        connect(lastRequest)
+    }
+
     func connect(_ request: MacConnectionRequest) {
+        lastRequest = request
         disconnect(newState: .connecting)
         let stream = RFBStream(endpoints: request.endpoints)
         self.stream = stream
